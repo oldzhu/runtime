@@ -4515,6 +4515,7 @@ private:
     void impSpillCliqueSetMember(SpillCliqueDir predOrSucc, BasicBlock* blk, BYTE val);
 
     void impPushVar(GenTree* op, typeInfo tiRetVal);
+    GenTreeLclVar* impCreateLocalNode(unsigned lclNum DEBUGARG(IL_OFFSET offset));
     void impLoadVar(unsigned lclNum, IL_OFFSET offset, const typeInfo& tiRetVal);
     void impLoadVar(unsigned lclNum, IL_OFFSET offset)
     {
@@ -7986,6 +7987,14 @@ public:
     }
 
     bool eeRunWithErrorTrapImp(void (*function)(void*), void* param);
+
+    template <typename ParamType>
+    bool eeRunWithSPMIErrorTrap(void (*function)(ParamType*), ParamType* param)
+    {
+        return eeRunWithSPMIErrorTrapImp(reinterpret_cast<void (*)(void*)>(function), reinterpret_cast<void*>(param));
+    }
+
+    bool eeRunWithSPMIErrorTrapImp(void (*function)(void*), void* param);
 
     // Utility functions
 
