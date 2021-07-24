@@ -206,7 +206,7 @@ while [[ $# > 0 ]]; do
       fi
       passedArch="$(echo "$2" | tr "[:upper:]" "[:lower:]")"
       case "$passedArch" in
-        x64|x86|arm|armel|arm64|s390x|wasm)
+        x64|x86|arm|armel|arm64|s390x|wasm|riscv32|riscv64)
           arch=$passedArch
           ;;
         *)
