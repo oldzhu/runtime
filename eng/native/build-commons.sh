@@ -315,6 +315,14 @@ while :; do
             __BuildArch=armel
             ;;
 
+        riscv32|-riscv32)
+	    __BuildArch=riscv32
+	    ;;
+
+        riscv64|-riscv64)
+	    __BuildArch=riscv64
+	    ;;
+
         bindir|-bindir)
             if [[ -n "$2" ]]; then
                 __RootBinDir="$2"
