@@ -31,13 +31,8 @@
 
 #include "eeconfig.h"
 
-#include "ceefilegenwriter.h"
 #include "assemblynative.hpp"
 #include "threadsuspend.h"
-
-#ifdef FEATURE_PREJIT
-#include "corcompile.h"
-#endif
 
 #include "appdomainnative.hpp"
 #include "customattribute.h"
