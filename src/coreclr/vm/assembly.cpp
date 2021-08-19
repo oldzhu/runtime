@@ -122,9 +122,9 @@ Assembly::Assembly(BaseDomain *pDomain, PEAssembly* pFile, DebuggerAssemblyContr
 #endif
     m_debuggerFlags(debuggerFlags),
     m_fTerminated(FALSE),
-#if defined(FEATURE_PREJIT) || defined(FEATURE_READYTORUN)
+#if FEATURE_READYTORUN
     m_isInstrumentedStatus(IS_INSTRUMENTED_UNSET)
-#endif
+#endif // FEATURE_READYTORUN
 {
     STANDARD_VM_CONTRACT;
 }
@@ -242,24 +242,6 @@ Assembly::~Assembly()
 #endif // FEATURE_COMINTEROP
 }
 
-#ifdef  FEATURE_PREJIT
-void Assembly::DeleteNativeCodeRanges()
-{
-    CONTRACTL
-    {
-        NOTHROW;
-        GC_NOTRIGGER;
-        MODE_PREEMPTIVE;
-        FORBID_FAULT;
-    }
-    CONTRACTL_END
-
-    ModuleIterator i = IterateModules();
-    while (i.Next())
-            i.GetModule()->DeleteNativeCodeRanges();
-}
-#endif
-
 #ifdef PROFILING_SUPPORTED
 void ProfilerCallAssemblyUnloadStarted(Assembly* assemblyUnloaded)
 {
@@ -374,7 +356,7 @@ Assembly * Assembly::Create(
 
 
 #ifndef CROSSGEN_COMPILE
-Assembly *Assembly::CreateDynamic(AppDomain *pDomain, ICLRPrivBinder* pBinderContext, CreateDynamicAssemblyArgs *args)
+Assembly *Assembly::CreateDynamic(AppDomain *pDomain, AssemblyBinder* pBinderContext, CreateDynamicAssemblyArgs *args)
 {
     // WARNING: not backout clean
     CONTRACT(Assembly *)
@@ -516,7 +498,7 @@ Assembly *Assembly::CreateDynamic(AppDomain *pDomain, ICLRPrivBinder* pBinderCon
                                                    &ma));
         pFile = PEAssembly::Create(pCallerAssembly->GetManifestFile(), pAssemblyEmit);
 
-        ICLRPrivBinder* pFallbackLoadContextBinder = pBinderContext;
+        AssemblyBinder* pFallbackLoadContextBinder = pBinderContext;
 
         // If ALC is not specified
         if (pFallbackLoadContextBinder == nullptr)
@@ -545,12 +527,10 @@ Assembly *Assembly::CreateDynamic(AppDomain *pDomain, ICLRPrivBinder* pBinderCon
                 else
                 {
                     // Fetch the binder from the host assembly
-                    PTR_ICLRPrivAssembly pCallerAssemblyHostAssembly = pCallerAssemblyManifestFile->GetHostAssembly();
+                    PTR_BINDER_SPACE_Assembly pCallerAssemblyHostAssembly = pCallerAssemblyManifestFile->GetHostAssembly();
                     _ASSERTE(pCallerAssemblyHostAssembly != nullptr);
 
-                    UINT_PTR assemblyBinderID = 0;
-                    IfFailThrow(pCallerAssemblyHostAssembly->GetBinderID(&assemblyBinderID));
-                    pFallbackLoadContextBinder = reinterpret_cast<ICLRPrivBinder*>(assemblyBinderID);
+                    pFallbackLoadContextBinder = pCallerAssemblyHostAssembly->GetBinder();
                 }
             }
             else
@@ -575,10 +555,9 @@ Assembly *Assembly::CreateDynamic(AppDomain *pDomain, ICLRPrivBinder* pBinderCon
         GCX_PREEMP();
 
         AssemblyLoaderAllocator* pBinderAssemblyLoaderAllocator = nullptr;
-
         if (pBinderContext != nullptr)
         {
-            pBinderContext->GetLoaderAllocator((LPVOID*)&pBinderAssemblyLoaderAllocator);
+            pBinderAssemblyLoaderAllocator = pBinderContext->GetLoaderAllocator();
         }
 
         // Create a new LoaderAllocator if appropriate
@@ -1833,7 +1812,7 @@ BOOL Assembly::GetResource(LPCSTR szName, DWORD *cbResource,
     return result;
 }
 
-#if defined(FEATURE_PREJIT) || defined(FEATURE_READYTORUN)
+#ifdef FEATURE_READYTORUN
 BOOL Assembly::IsInstrumented()
 {
     STATIC_CONTRACT_THROWS;
@@ -1943,7 +1922,7 @@ BOOL Assembly::IsInstrumentedHelper()
 
     return false;
 }
-#endif // FEATURE_PREJIT
+#endif // FEATURE_READYTORUN
 
 
 #ifdef FEATURE_COMINTEROP
