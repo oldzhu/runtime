@@ -1405,9 +1405,6 @@ private:
 
     static BOOL HasCheckForPendingException(MethodDesc* pTargetMD)
     {
-#ifdef CROSSGEN_COMPILE
-        return FALSE;
-#else
         if (pTargetMD == NULL || !pTargetMD->IsNDirect())
             return FALSE;
 
@@ -1416,7 +1413,6 @@ private:
             return FALSE;
 
         return TRUE;
-#endif // !CROSSGEN_COMPILE
     }
 };
 
@@ -2847,7 +2843,6 @@ void PInvokeStaticSigInfo::DllImportInit(
     SetCharSet(nlt);
 }
 
-#if !defined(CROSSGEN_COMPILE) // IJW
 
 // This function would work, but be unused on Unix. Ifdefing out to avoid build errors due to the unused function.
 #if !defined (TARGET_UNIX)
@@ -2948,7 +2943,6 @@ DWORD STDMETHODCALLTYPE FalseGetLastError()
     return GetThread()->m_dwLastError;
 }
 
-#endif // !CROSSGEN_COMPILE
 
 CorInfoCallConvExtension GetDefaultCallConv(BOOL bIsVarArg)
 {
@@ -2964,9 +2958,6 @@ void PInvokeStaticSigInfo::InitCallConv(_In_ CorInfoCallConvExtension callConv, 
     }
     CONTRACTL_END;
 
-#ifdef CROSSGEN_COMPILE
-    _ASSERTE_MSG(!pMD->HasUnmanagedCallConvAttribute(), "UnmanagedCallConv methods are not supported in crossgen and should be rejected before getting here.");
-#else
     // If the calling convention has not been determined yet, check the UnmanagedCallConv attribute
     if (callConv == CallConvWinApiSentinel)
     {
@@ -2990,7 +2981,6 @@ void PInvokeStaticSigInfo::InitCallConv(_In_ CorInfoCallConvExtension callConv, 
             }
         }
     }
-#endif // CROSSGEN_COMPILE
 
     InitCallConv(callConv, pMD->IsVarArg());
 }
@@ -3164,9 +3154,6 @@ void NDirect::GetCallingConvention_IgnoreErrors(_In_ MethodDesc* pMD, _Out_opt_ 
             return;
         }
 
-#ifdef CROSSGEN_COMPILE
-        _ASSERTE_MSG(!pMD->HasUnmanagedCallConvAttribute(), "UnmanagedCallConv methods are not supported in crossgen and should be rejected before getting here.");
-#else
         // System.Runtime.InteropServices.UnmanagedCallConvAttribute
         CallConvBuilder unmanagedCallConvBuilder;
         if (CallConv::TryGetCallingConventionFromUnmanagedCallConv(pMD, &unmanagedCallConvBuilder, NULL /*errorResID*/) == S_OK)
@@ -3185,7 +3172,6 @@ void NDirect::GetCallingConvention_IgnoreErrors(_In_ MethodDesc* pMD, _Out_opt_ 
                 return;
             }
         }
-#endif // CROSSGEN_COMPILE
 
         // Caller only cares about SuppressGCTransition - we have checked SuppressGCTransition and UnmanagedCallConv
         if (callConv == NULL)
@@ -3297,17 +3283,11 @@ BOOL NDirect::MarshalingRequired(
                 return TRUE;
 
             NDirectMethodDesc* pNMD = (NDirectMethodDesc*)pMD;
-            // Make sure running cctor can be handled by stub
-            if (pNMD->IsClassConstructorTriggeredByILStub())
-                return TRUE;
-
             InitializeSigInfoAndPopulateNDirectMethodDesc(pNMD, &sigInfo);
 
-#ifndef CROSSGEN_COMPILE
             // Pending exceptions are handled by stub
             if (Interop::ShouldCheckForPendingException(pNMD))
                 return TRUE;
-#endif // !CROSSGEN_COMPILE
         }
 
         // SetLastError is handled by stub
@@ -4885,7 +4865,6 @@ namespace
         //
         if (pTargetMD && SUCCEEDED(FindPredefinedILStubMethod(pTargetMD, dwStubFlags, &pStubMD)))
         {
-#ifndef CROSSGEN_COMPILE
             // We are about to execute method in pStubMD which could be in another module.
             // Call EnsureActive before make the call
             // This cannot be done during NGEN/PEVerify (in PASSIVE_DOMAIN) so I've moved it here
@@ -4893,7 +4872,6 @@ namespace
 
             if (pStubMD->IsPreImplemented())
                 RestoreNGENedStub(pStubMD);
-#endif
 
             RETURN pStubMD;
         }
@@ -5454,11 +5432,6 @@ MethodDesc* NDirect::GetILStubMethodDesc(NDirectMethodDesc* pNMD, PInvokeStaticS
 
     if (!pNMD->IsVarArgs() || SF_IsForNumParamBytes(dwStubFlags))
     {
-        if (pNMD->IsClassConstructorTriggeredByILStub())
-        {
-            dwStubFlags |= NDIRECTSTUB_FL_TRIGGERCCTOR;
-        }
-
         pStubMD = CreateCLRToNativeILStub(
             pSigInfo,
             dwStubFlags & ~NDIRECTSTUB_FL_FOR_NUMPARAMBYTES,
@@ -5514,7 +5487,6 @@ MethodDesc* GetStubMethodDescFromInteropMethodDesc(MethodDesc* pMD, DWORD dwStub
     }
 }
 
-#ifndef CROSSGEN_COMPILE
 
 namespace
 {
@@ -6174,11 +6146,6 @@ PCODE GetILStubForCalli(VASigCookie *pVASigCookie, MethodDesc *pMD)
 
         // vararg P/Invoke must be cdecl
         unmgdCallConv = CorInfoCallConvExtension::C;
-
-        if (((NDirectMethodDesc *)pMD)->IsClassConstructorTriggeredByILStub())
-        {
-            dwStubFlags |= NDIRECTSTUB_FL_TRIGGERCCTOR;
-        }
     }
 
     mdMethodDef md;
@@ -6220,6 +6187,5 @@ PCODE GetILStubForCalli(VASigCookie *pVASigCookie, MethodDesc *pMD)
     RETURN pVASigCookie->pNDirectILStub;
 }
 
-#endif // CROSSGEN_COMPILE
 
 #endif // #ifndef DACCESS_COMPILE
