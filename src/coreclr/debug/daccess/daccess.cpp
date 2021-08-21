@@ -5821,28 +5821,8 @@ ClrDataAccess::RawGetMethodName(
         //
         // Special-cased stub managers
         //
-#ifdef FEATURE_PREJIT
-        if (pStubManager == RangeSectionStubManager::g_pManager)
-        {
-            switch (RangeSectionStubManager::GetStubKind(TO_TADDR(address)))
-            {
-            case STUB_CODE_BLOCK_PRECODE:
-                goto PrecodeStub;
-
-            case STUB_CODE_BLOCK_JUMPSTUB:
-                goto JumpStub;
-
-            default:
-                break;
-            }
-        }
-        else
-#endif
         if (pStubManager == PrecodeStubManager::g_pManager)
         {
-#ifdef FEATURE_PREJIT
-        PrecodeStub:
-#endif
             PCODE alignedAddress = AlignDown(TO_TADDR(address), PRECODE_ALIGNMENT);
 
 #ifdef TARGET_ARM
@@ -5887,9 +5867,6 @@ ClrDataAccess::RawGetMethodName(
         else
         if (pStubManager == JumpStubStubManager::g_pManager)
         {
-#ifdef FEATURE_PREJIT
-        JumpStub:
-#endif
             PCODE pTarget = decodeBackToBackJump(TO_TADDR(address));
 
             HRESULT hr = GetRuntimeNameByAddress(pTarget, flags, bufLen, symbolLen, symbolBuf, NULL);
@@ -6078,8 +6055,14 @@ ClrDataAccess::GetMethodVarInfo(MethodDesc* methodDesc,
     COUNT_T countNativeVarInfo;
     NewHolder<ICorDebugInfo::NativeVarInfo> nativeVars(NULL);
 
+    NativeCodeVersion requestedNativeCodeVersion = ExecutionManager::GetNativeCodeVersion(address);
+    if (requestedNativeCodeVersion.IsNull() || requestedNativeCodeVersion.GetNativeCode() == NULL)
+    {
+        return E_INVALIDARG;
+    }
+    TADDR nativeCodeStartAddr = PCODEToPINSTR(requestedNativeCodeVersion.GetNativeCode());
+
     DebugInfoRequest request;
-    TADDR  nativeCodeStartAddr = PCODEToPINSTR(methodDesc->GetNativeCode());
     request.InitFromStartingAddr(methodDesc, nativeCodeStartAddr);
 
     BOOL success = DebugInfoManager::GetBoundariesAndVars(
@@ -6087,7 +6070,6 @@ ClrDataAccess::GetMethodVarInfo(MethodDesc* methodDesc,
         DebugInfoStoreNew, NULL, // allocator
         NULL, NULL,
         &countNativeVarInfo, &nativeVars);
-
 
     if (!success)
     {
@@ -6105,8 +6087,7 @@ ClrDataAccess::GetMethodVarInfo(MethodDesc* methodDesc,
 
     if (codeOffset)
     {
-        *codeOffset = (ULONG32)
-            (address - nativeCodeStartAddr);
+        *codeOffset = (ULONG32)(address - nativeCodeStartAddr);
     }
     return S_OK;
 }
@@ -6125,10 +6106,15 @@ ClrDataAccess::GetMethodNativeMap(MethodDesc* methodDesc,
     // Use the DebugInfoStore to get IL->Native maps.
     // It doesn't matter whether we're jitted, ngenned etc.
 
-    DebugInfoRequest request;
-    TADDR  nativeCodeStartAddr = PCODEToPINSTR(methodDesc->GetNativeCode());
-    request.InitFromStartingAddr(methodDesc, nativeCodeStartAddr);
+    NativeCodeVersion requestedNativeCodeVersion = ExecutionManager::GetNativeCodeVersion(address);
+    if (requestedNativeCodeVersion.IsNull() || requestedNativeCodeVersion.GetNativeCode() == NULL)
+    {
+        return E_INVALIDARG;
+    }
+    TADDR nativeCodeStartAddr = PCODEToPINSTR(requestedNativeCodeVersion.GetNativeCode());
 
+    DebugInfoRequest request;
+    request.InitFromStartingAddr(methodDesc, nativeCodeStartAddr);
 
     // Bounds info.
     ULONG32 countMapCopy;
@@ -6144,7 +6130,6 @@ ClrDataAccess::GetMethodNativeMap(MethodDesc* methodDesc,
     {
         return E_FAIL;
     }
-
 
     // Need to convert map formats.
     *numMap = countMapCopy;
@@ -6179,8 +6164,7 @@ ClrDataAccess::GetMethodNativeMap(MethodDesc* methodDesc,
     }
     if (codeOffset)
     {
-        *codeOffset = (ULONG32)
-            (address - nativeCodeStartAddr);
+        *codeOffset = (ULONG32)(address - nativeCodeStartAddr);
     }
 
     *mapAllocated = true;
@@ -6585,14 +6569,8 @@ bool ClrDataAccess::GetILImageInfoFromNgenPEFile(PEFile *peFile,
         // Use DAC hint to retrieve the IL name.
         peFile->GetModuleFileNameHint().DacGetUnicode(cchFilePath, wszFilePath, (COUNT_T *)(&dwWritten));
     }
-#ifdef FEATURE_PREJIT
-    // Need to get IL image information from cached info in the ngen image.
-    dwTimeStamp = peFile->GetLoaded()->GetNativeVersionInfo()->sourceAssembly.timeStamp;
-    dwSize = peFile->GetLoaded()->GetNativeVersionInfo()->sourceAssembly.ilImageSize;
-#else
     dwTimeStamp = 0;
     dwSize = 0;
-#endif //  FEATURE_PREJIT
 
     return true;
 }

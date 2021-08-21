@@ -49,9 +49,6 @@ add_compile_definitions("$<$<OR:$<CONFIG:RELEASE>,$<CONFIG:RELWITHDEBINFO>>:NDEB
 
 if (MSVC)
   add_linker_flag(/guard:cf)
-  #if (CLR_CMAKE_HOST_ARCH_AMD64)
-  #  add_linker_flag(/guard:ehcont)
-  #endif (CLR_CMAKE_HOST_ARCH_AMD64)
 
   # Linker flags
   #
@@ -73,10 +70,6 @@ if (MSVC)
   set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} /DEBUG")
   set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} /IGNORE:4197,4013,4254,4070,4221")
   set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} /SUBSYSTEM:WINDOWS,${WINDOWS_SUBSYSTEM_VERSION}")
-
-  #if (CLR_CMAKE_HOST_ARCH_AMD64)
-  #  set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} /CETCOMPAT")
-  #endif (CLR_CMAKE_HOST_ARCH_AMD64)
 
   set(CMAKE_STATIC_LINKER_FLAGS "${CMAKE_STATIC_LINKER_FLAGS} /IGNORE:4221")
 
@@ -220,6 +213,13 @@ elseif (CLR_CMAKE_HOST_ARCH_S390X)
   set(ARCH_HOST_NAME s390x)
   add_definitions(-DHOST_S390X)
   add_definitions(-DHOST_64BIT)
+elseif (CLR_CMAKE_HOST_ARCH_RISCV32)
+  set(ARCH_HOST_NAME riscv32)
+  add_definitions(-DHOST_RISCV32)
+elseif (CLR_CMAKE_HOST_ARCH_RISCV64)
+  set(ARCH_HOST_NAME riscv64)
+  add_definitions(-DHOST_RISCV64)
+  add_definitions(-DHOST_64BIT)
 else ()
   clr_unknown_arch()
 endif ()
@@ -236,6 +236,10 @@ if (CLR_CMAKE_HOST_UNIX)
       message("Detected Linux i686")
     elseif(CLR_CMAKE_HOST_UNIX_S390X)
       message("Detected Linux s390x")
+    elseif(CLR_CMAKE_HOST_UNIX_RISCV32)
+      message("Detected Linux riscv32")
+    elseif(CLR_CMAKE_HOST_UNIX_RISCV64)
+      message("Detected Linux riscv64")
     else()
       clr_unknown_arch()
     endif()
@@ -295,6 +299,15 @@ elseif (CLR_CMAKE_TARGET_ARCH_S390X)
     set(ARCH_TARGET_NAME s390x)
     set(ARCH_SOURCES_DIR s390x)
     add_compile_definitions($<$<NOT:$<BOOL:$<TARGET_PROPERTY:IGNORE_DEFAULT_TARGET_ARCH>>>:TARGET_S390X>)
+    add_compile_definitions($<$<NOT:$<BOOL:$<TARGET_PROPERTY:IGNORE_DEFAULT_TARGET_ARCH>>>:TARGET_64BIT>)
+elseif (CLR_CMAKE_TARGET_ARCH_RISCV32)
+    set(ARCH_TARGET_NAME riscv32)
+    set(ARCH_SOURCES_DIR riscv32)
+    add_compile_definitions($<$<NOT:$<BOOL:$<TARGET_PROPERTY:IGNORE_DEFAULT_TARGET_ARCH>>>:TARGET_RISCV32>)
+elseif (CLR_CMAKE_TARGET_ARCH_RISCV64)
+    set(ARCH_TARGET_NAME riscv64)
+    set(ARCH_SOURCES_DIR riscv64)
+    add_compile_definitions($<$<NOT:$<BOOL:$<TARGET_PROPERTY:IGNORE_DEFAULT_TARGET_ARCH>>>:TARGET_RISCV64>)
     add_compile_definitions($<$<NOT:$<BOOL:$<TARGET_PROPERTY:IGNORE_DEFAULT_TARGET_ARCH>>>:TARGET_64BIT>)
 else ()
     clr_unknown_arch()
@@ -572,13 +585,15 @@ if (MSVC)
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /guard:cf")
   set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /guard:cf")
 
-  # Enable EH-continuation table for native components for amd64 builds
-  # Added using variables instead of add_compile_options to let individual projects override it
-  if (CLR_CMAKE_HOST_ARCH_AMD64)
+  # Enable EH-continuation table and CET-compatibility for native components for amd64 builds except for components of the Mono
+  # runtime. Added some switches using variables instead of add_compile_options to let individual projects override it.
+  if (CLR_CMAKE_HOST_ARCH_AMD64 AND NOT CLR_CMAKE_RUNTIME_MONO)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /guard:ehcont")
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /guard:ehcont")
-    set(CMAKE_ASM_MASM_FLAGS "${CMAKE_C_FLAGS} /guard:ehcont")
-  endif (CLR_CMAKE_HOST_ARCH_AMD64)
+    set(CMAKE_ASM_MASM_FLAGS "${CMAKE_ASM_MASM_FLAGS} /guard:ehcont")
+    add_linker_flag(/guard:ehcont)
+    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} /CETCOMPAT")
+  endif (CLR_CMAKE_HOST_ARCH_AMD64 AND NOT CLR_CMAKE_RUNTIME_MONO)
 
   # Statically linked CRT (libcmt[d].lib, libvcruntime[d].lib and libucrt[d].lib) by default. This is done to avoid
   # linking in VCRUNTIME140.DLL for a simplified xcopy experience by reducing the dependency on VC REDIST.

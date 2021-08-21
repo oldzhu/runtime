@@ -4053,6 +4053,8 @@ protected:
                             CORINFO_CALL_INFO* callInfo,
                             IL_OFFSET          rawILOffset);
 
+    CORINFO_CLASS_HANDLE impGetSpecialIntrinsicExactReturnType(CORINFO_METHOD_HANDLE specialIntrinsicHandle);
+
     bool impMethodInfo_hasRetBuffArg(CORINFO_METHOD_INFO* methInfo, CorInfoCallConvExtension callConv);
 
     GenTree* impFixupCallStructReturn(GenTreeCall* call, CORINFO_CLASS_HANDLE retClsHnd);
@@ -4100,6 +4102,7 @@ protected:
                               var_types             callType,
                               NamedIntrinsic        intrinsicName,
                               bool                  tailCall);
+    NamedIntrinsic lookupNamedIntrinsic(CORINFO_METHOD_HANDLE method);
     GenTree* impUnsupportedNamedIntrinsic(unsigned              helper,
                                           CORINFO_METHOD_HANDLE method,
                                           CORINFO_SIG_INFO*     sig,
@@ -4200,7 +4203,6 @@ public:
         CHECK_SPILL_NONE = -2
     };
 
-    NamedIntrinsic lookupNamedIntrinsic(CORINFO_METHOD_HANDLE method);
     void impBeginTreeList();
     void impEndTreeList(BasicBlock* block, Statement* firstStmt, Statement* lastStmt);
     void impEndTreeList(BasicBlock* block);
@@ -5194,6 +5196,10 @@ public:
     // Assign the proper value number to the tree
     void fgValueNumberTreeConst(GenTree* tree);
 
+    // If the VN store has been initialized, reassign the
+    // proper value number to the constant tree.
+    void fgUpdateConstTreeValueNumber(GenTree* tree);
+
     // Assumes that all inputs to "tree" have had value numbers assigned; assigns a VN to tree.
     // (With some exceptions: the VN of the lhs of an assignment is assigned as part of the
     // assignment.)
@@ -5847,6 +5853,7 @@ public:
     void fgSetProfileWeight(BasicBlock* block, BasicBlock::weight_t weight);
     void fgApplyProfileScale();
     bool fgHaveSufficientProfileData();
+    bool fgHaveTrustedProfileData();
 
     // fgIsUsingProfileWeights - returns true if we have real profile data for this method
     //                           or if we have some fake profile data for the stress mode
@@ -6084,6 +6091,7 @@ private:
     GenTree* fgMorphCopyBlock(GenTree* tree);
     GenTree* fgMorphForRegisterFP(GenTree* tree);
     GenTree* fgMorphSmpOp(GenTree* tree, MorphAddrContext* mac = nullptr);
+    GenTree* fgOptimizeEqualityComparisonWithConst(GenTreeOp* cmp);
     GenTree* fgMorphRetInd(GenTreeUnOp* tree);
     GenTree* fgMorphModToSubMulDiv(GenTreeOp* tree);
     GenTree* fgMorphSmpOpOptional(GenTreeOp* tree);
@@ -9298,7 +9306,7 @@ public:
             return !!(compFlags & optFlag);
         }
 
-#ifdef FEATURE_READYTORUN_COMPILER
+#ifdef FEATURE_READYTORUN
         bool IsReadyToRun()
         {
             return jitFlags->IsSet(JitFlags::JIT_FLAG_READYTORUN);

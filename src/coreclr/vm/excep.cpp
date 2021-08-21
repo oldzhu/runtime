@@ -62,7 +62,6 @@
 #define NULL_AREA_SIZE   GetOsPageSize()
 #endif // !TARGET_UNIX
 
-#ifndef CROSSGEN_COMPILE
 
 BOOL IsIPInEE(void *ip);
 
@@ -3000,7 +2999,7 @@ void GetExceptionForHR(HRESULT hr, IErrorInfo* pErrInfo, OBJECTREF* pProtectedTh
     // Initialize
     *pProtectedThrowable = NULL;
 
-#if defined(FEATURE_COMINTEROP) && !defined(CROSSGEN_COMPILE)
+#if defined(FEATURE_COMINTEROP)
     if (pErrInfo != NULL)
     {
         // If this represents a managed object...
@@ -3034,7 +3033,7 @@ void GetExceptionForHR(HRESULT hr, IErrorInfo* pErrInfo, OBJECTREF* pProtectedTh
             (*pProtectedThrowable) = ex.GetThrowable();
         }
     }
-#endif // defined(FEATURE_COMINTEROP) && !defined(CROSSGEN_COMPILE)
+#endif // defined(FEATURE_COMINTEROP)
 
     // If we made it here and we don't have an exception object, we didn't have a valid IErrorInfo
     // so we'll create an exception based solely on the hresult.
@@ -3057,10 +3056,8 @@ void GetExceptionForHR(HRESULT hr, OBJECTREF* pProtectedThrowable)
 
     // Get an IErrorInfo if one is available.
     IErrorInfo *pErrInfo = NULL;
-#ifndef CROSSGEN_COMPILE
     if (SafeGetErrorInfo(&pErrInfo) != S_OK)
         pErrInfo = NULL;
-#endif
 
     GetExceptionForHR(hr, pErrInfo, pProtectedThrowable);
 }
@@ -4084,7 +4081,7 @@ BuildCreateDumpCommandLine(
     }
 }
 
-static DWORD 
+static DWORD
 LaunchCreateDump(LPCWSTR lpCommandLine)
 {
     DWORD fSuccess = false;
@@ -7186,6 +7183,52 @@ LONG WINAPI CLRVectoredExceptionHandler(PEXCEPTION_POINTERS pExceptionInfo)
         }
 
     }
+#ifdef TARGET_AMD64
+
+#ifndef STATUS_RETURN_ADDRESS_HIJACK_ATTEMPT
+#define STATUS_RETURN_ADDRESS_HIJACK_ATTEMPT ((DWORD)0x80000033L)
+#endif
+
+    if (pExceptionInfo->ExceptionRecord->ExceptionCode == STATUS_RETURN_ADDRESS_HIJACK_ATTEMPT)
+    {
+        HijackArgs hijackArgs;
+        hijackArgs.Rax = pExceptionInfo->ContextRecord->Rax;
+        hijackArgs.Rsp = pExceptionInfo->ContextRecord->Rsp;
+
+        bool areCetShadowStacksEnabled = Thread::AreCetShadowStacksEnabled();
+        if (areCetShadowStacksEnabled)
+        {
+            // When the CET is enabled, the return address is still on stack, so we need to set the Rsp as
+            // if it was popped.
+            hijackArgs.Rsp += 8;
+        }
+        hijackArgs.Rip = 0 ; // The OnHijackWorker sets this
+        #define CALLEE_SAVED_REGISTER(regname) hijackArgs.Regs.regname = pExceptionInfo->ContextRecord->regname;
+        ENUM_CALLEE_SAVED_REGISTERS();
+        #undef CALLEE_SAVED_REGISTER
+
+        OnHijackWorker(&hijackArgs);
+
+        #define CALLEE_SAVED_REGISTER(regname) pExceptionInfo->ContextRecord->regname = hijackArgs.Regs.regname;
+        ENUM_CALLEE_SAVED_REGISTERS();
+        #undef CALLEE_SAVED_REGISTER
+        pExceptionInfo->ContextRecord->Rax = hijackArgs.Rax;
+
+        if (areCetShadowStacksEnabled)
+        {
+            // The context refers to the return instruction
+            // Set the return address on the stack to the original one
+            *(size_t *)pExceptionInfo->ContextRecord->Rsp = hijackArgs.ReturnAddress;
+        }
+        else
+        {
+            // The context refers to the location after the return was processed
+            pExceptionInfo->ContextRecord->Rip = hijackArgs.ReturnAddress;
+        }
+
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
+#endif
 
     // We need to unhijack the thread here if it is not unhijacked already.  On x86 systems,
     // we do this in Thread::StackWalkFramesEx, but on amd64 systems we have the OS walk the
@@ -7569,17 +7612,7 @@ BOOL IsIPInEE(void *ip)
 {
     WRAPPER_NO_CONTRACT;
 
-#if defined(FEATURE_PREJIT) && !defined(TARGET_UNIX)
-    if ((TADDR)ip > g_runtimeLoadedBaseAddress &&
-        (TADDR)ip < g_runtimeLoadedBaseAddress + g_runtimeVirtualSize)
-    {
-        return TRUE;
-    }
-    else
-#endif // FEATURE_PREJIT && !TARGET_UNIX
-    {
-        return FALSE;
-    }
+    return FALSE;
 }
 
 #if defined(FEATURE_HIJACK) && (!defined(TARGET_X86) || defined(TARGET_UNIX))
@@ -9050,6 +9083,7 @@ void SetupWatsonBucketsForUEF(BOOL fUseLastThrownObject)
     struct
     {
         OBJECTREF oThrowable;
+        U1ARRAYREF oBuckets;
     } gc;
     ZeroMemory(&gc, sizeof(gc));
     GCPROTECT_BEGIN(gc);
@@ -9151,9 +9185,10 @@ void SetupWatsonBucketsForUEF(BOOL fUseLastThrownObject)
                 SetupWatsonBucketsForNonPreallocatedExceptions(gc.oThrowable);
             }
 
-            if (((EXCEPTIONREF)gc.oThrowable)->AreWatsonBucketsPresent())
+            gc.oBuckets = ((EXCEPTIONREF)gc.oThrowable)->GetWatsonBucketReference();
+            if (gc.oBuckets != NULL)
             {
-                pUEWatsonBucketTracker->CopyBucketsFromThrowable(gc.oThrowable);
+                pUEWatsonBucketTracker->CopyBuckets(gc.oBuckets);
             }
 
             if (pUEWatsonBucketTracker->RetrieveWatsonBuckets() == NULL)
@@ -9473,6 +9508,7 @@ BOOL SetupWatsonBucketsForFailFast(EXCEPTIONREF refException)
     {
         OBJECTREF refException;
         OBJECTREF oInnerMostExceptionThrowable;
+        U1ARRAYREF oBuckets;
     } gc;
     ZeroMemory(&gc, sizeof(gc));
     GCPROTECT_BEGIN(gc);
@@ -9623,10 +9659,11 @@ BOOL SetupWatsonBucketsForFailFast(EXCEPTIONREF refException)
                 }
 
                 // If it has the buckets, copy them over to the current Watson bucket tracker
-                if (((EXCEPTIONREF)gc.oInnerMostExceptionThrowable)->AreWatsonBucketsPresent())
+                gc.oBuckets = ((EXCEPTIONREF)gc.oInnerMostExceptionThrowable)->GetWatsonBucketReference();
+                if (gc.oBuckets != NULL)
                 {
                     pUEWatsonBucketTracker->ClearWatsonBucketDetails();
-                    pUEWatsonBucketTracker->CopyBucketsFromThrowable(gc.oInnerMostExceptionThrowable);
+                    pUEWatsonBucketTracker->CopyBuckets(gc.oBuckets);
                     if (pUEWatsonBucketTracker->RetrieveWatsonBuckets() != NULL)
                     {
                         LOG((LF_EH, LL_INFO1000, "SetupWatsonBucketsForFailFast - Got watson buckets from regular innermost exception.\n"));
@@ -9665,11 +9702,12 @@ BOOL SetupWatsonBucketsForFailFast(EXCEPTIONREF refException)
                 SetupWatsonBucketsForNonPreallocatedExceptions(gc.refException);
             }
 
-            if (((EXCEPTIONREF)gc.refException)->AreWatsonBucketsPresent())
+            gc.oBuckets = ((EXCEPTIONREF)gc.refException)->GetWatsonBucketReference();
+            if (gc.oBuckets != NULL)
             {
                 // Copy the buckets to the current watson bucket tracker
                 pUEWatsonBucketTracker->ClearWatsonBucketDetails();
-                pUEWatsonBucketTracker->CopyBucketsFromThrowable(gc.refException);
+                pUEWatsonBucketTracker->CopyBuckets(gc.oBuckets);
                 if (pUEWatsonBucketTracker->RetrieveWatsonBuckets() != NULL)
                 {
                     LOG((LF_EH, LL_INFO1000, "SetupWatsonBucketsForFailFast - Watson buckets copied from the exception object.\n"));
@@ -9904,6 +9942,9 @@ void SetupInitialThrowBucketDetails(UINT_PTR adjustedIp)
                     EX_TRY
                     {
                         CopyWatsonBucketsToThrowable(pUEWatsonBucketTracker->RetrieveWatsonBuckets());
+
+                        // Technically this assert can fail, as another thread could clear the buckets after
+                        // CopyWatsonBucketsToThrowable but before the assert runs, but it is very unlikely.
                         _ASSERTE(((EXCEPTIONREF)gc.oCurrentThrowable)->AreWatsonBucketsPresent());
                     }
                     EX_CATCH
@@ -10640,7 +10681,7 @@ void EHWatsonBucketTracker::Init()
 
 // This method copies the bucketing details from the specified throwable
 // to the current Watson Bucket tracker.
-void EHWatsonBucketTracker::CopyBucketsFromThrowable(OBJECTREF oThrowable)
+void EHWatsonBucketTracker::CopyBuckets(U1ARRAYREF oBuckets)
 {
 #ifndef DACCESS_COMPILE
     CONTRACTL
@@ -10648,8 +10689,7 @@ void EHWatsonBucketTracker::CopyBucketsFromThrowable(OBJECTREF oThrowable)
         NOTHROW;
         GC_NOTRIGGER;
         MODE_ANY;
-        PRECONDITION(oThrowable != NULL);
-        PRECONDITION(((EXCEPTIONREF)oThrowable)->AreWatsonBucketsPresent());
+        PRECONDITION(oBuckets != NULL);
         PRECONDITION(IsWatsonEnabled());
     }
     CONTRACTL_END;
@@ -10658,16 +10698,16 @@ void EHWatsonBucketTracker::CopyBucketsFromThrowable(OBJECTREF oThrowable)
 
     struct
     {
-        OBJECTREF oFrom;
+        U1ARRAYREF oFromBuckets;
     } _gc;
 
     ZeroMemory(&_gc, sizeof(_gc));
     GCPROTECT_BEGIN(_gc);
 
-    _gc.oFrom = oThrowable;
+    _gc.oFromBuckets = oBuckets;
 
-    LOG((LF_EH, LL_INFO1000, "EHWatsonBucketTracker::CopyEHWatsonBucketTracker - Copying bucketing details from throwable (%p) to tracker (%p)\n",
-                            OBJECTREFToObject(_gc.oFrom), this));
+    LOG((LF_EH, LL_INFO1000, "EHWatsonBucketTracker::CopyEHWatsonBucketTracker - Copying bucketing details from bucket (%p) to tracker (%p)\n",
+                            OBJECTREFToObject(_gc.oFromBuckets), this));
 
     // Watson bucket is a "GenericModeBlock" type. Set up an empty GenericModeBlock
     // to hold the bucket parameters.
@@ -10682,8 +10722,7 @@ void EHWatsonBucketTracker::CopyBucketsFromThrowable(OBJECTREF oThrowable)
     else
     {
         // Get the raw array data pointer
-        U1ARRAYREF refWatsonBucketArray = ((EXCEPTIONREF)_gc.oFrom)->GetWatsonBucketReference();
-        PTR_VOID pRawWatsonBucketArray = dac_cast<PTR_VOID>(refWatsonBucketArray->GetDataPtr());
+        PTR_VOID pRawWatsonBucketArray = dac_cast<PTR_VOID>(_gc.oFromBuckets->GetDataPtr());
 
         // Copy over the details to our new allocation
         memcpyNoGCRefs(pgmb, pRawWatsonBucketArray, sizeof(GenericModeBlock));
@@ -11423,7 +11462,6 @@ void ResetThreadAbortState(PTR_Thread pThread, CrawlFrame *pCf, StackFrame sfCur
 }
 #endif // !DACCESS_COMPILE
 
-#endif // !CROSSGEN_COMPILE
 
 //---------------------------------------------------------------------------------
 //
@@ -11673,7 +11711,6 @@ VOID DECLSPEC_NORETURN RealCOMPlusThrowHR(HRESULT hr, IErrorInfo* pErrInfo, Exce
     //_ASSERTE((hr != COR_E_EXECUTIONENGINE) ||
     //         !"ExecutionEngineException shouldn't be thrown. Use EEPolicy to failfast or a better exception. The caller of this function should modify their code.");
 
-#ifndef CROSSGEN_COMPILE
 #ifdef FEATURE_COMINTEROP
     // check for complus created IErrorInfo pointers
     if (pErrInfo != NULL)
@@ -11702,7 +11739,6 @@ VOID DECLSPEC_NORETURN RealCOMPlusThrowHR(HRESULT hr, IErrorInfo* pErrInfo, Exce
         }
     }
     else
-#endif // CROSSGEN_COMPILE
     {
         if (pInnerException == NULL)
         {
@@ -11750,10 +11786,8 @@ VOID DECLSPEC_NORETURN RealCOMPlusThrowHR(HRESULT hr, tagGetErrorInfo)
     // Get an IErrorInfo if one is available.
     IErrorInfo *pErrInfo = NULL;
 
-#ifndef CROSSGEN_COMPILE
     if (SafeGetErrorInfo(&pErrInfo) != S_OK)
         pErrInfo = NULL;
-#endif
 
     // Throw the exception.
     RealCOMPlusThrowHR(hr, pErrInfo);
@@ -12006,7 +12040,6 @@ VOID DECLSPEC_NORETURN RealCOMPlusThrow(RuntimeExceptionKind  reKind, UINT resID
 }
 
 #ifdef FEATURE_COMINTEROP
-#ifndef CROSSGEN_COMPILE
 //==========================================================================
 // Throw a runtime exception based on an HResult, check for error info
 //==========================================================================
@@ -12044,7 +12077,6 @@ VOID DECLSPEC_NORETURN RealCOMPlusThrowHR(EXCEPINFO *pExcepInfo)
 
     EX_THROW(EECOMException, (pExcepInfo));
 }
-#endif //CROSSGEN_COMPILE
 
 #endif // FEATURE_COMINTEROP
 
@@ -12171,7 +12203,6 @@ VOID RealCOMPlusThrowInvalidCastException(TypeHandle thCastFrom, TypeHandle thCa
     }
 }
 
-#ifndef CROSSGEN_COMPILE
 VOID RealCOMPlusThrowInvalidCastException(OBJECTREF *pObj, TypeHandle thCastTo)
 {
      CONTRACTL {
@@ -12192,11 +12223,9 @@ VOID RealCOMPlusThrowInvalidCastException(OBJECTREF *pObj, TypeHandle thCastTo)
 #endif
     COMPlusThrowInvalidCastException(thCastFrom, thCastTo);
 }
-#endif // CROSSGEN_COMPILE
 
 #endif // DACCESS_COMPILE
 
-#ifndef CROSSGEN_COMPILE // ???
 #ifdef FEATURE_COMINTEROP
 #include "comtoclrcall.h"
 #endif // FEATURE_COMINTEROP
@@ -12259,4 +12288,3 @@ MethodDesc * GetUserMethodForILStub(Thread * pThread, UINT_PTR uStubSP, MethodDe
 #endif // FEATURE_COMINTEROP
     return pUserMD;
 }
-#endif //CROSSGEN_COMPILE

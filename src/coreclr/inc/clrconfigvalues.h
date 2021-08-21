@@ -170,7 +170,6 @@ CONFIG_DWORD_INFO(INTERNAL_DbgBreakOnRawInt3, W("DbgBreakOnRawInt3"), 0, "Allows
 CONFIG_DWORD_INFO(INTERNAL_DbgBreakOnSendBreakpoint, W("DbgBreakOnSendBreakpoint"), 0, "Allows an assert when sending a breakpoint to the right side")
 CONFIG_DWORD_INFO(INTERNAL_DbgBreakOnSetIP, W("DbgBreakOnSetIP"), 0, "Allows an assert when setting the IP")
 CONFIG_DWORD_INFO(INTERNAL_DbgCheckInt3, W("DbgCheckInt3"), 0, "Asserts if the debugger explicitly writes int3 instead of calling SetUnmanagedBreakpoint")
-RETAIL_CONFIG_DWORD_INFO(INTERNAL_DbgForcePDBSymbols, W("DbgForcePDBSymbols"), 0, "")
 CONFIG_DWORD_INFO(INTERNAL_DbgDACAssertOnMismatch, W("DbgDACAssertOnMismatch"), 0, "Allows an assert when the mscordacwks and mscorwks dll versions don't match")
 CONFIG_DWORD_INFO(INTERNAL_DbgDACEnableAssert, W("DbgDACEnableAssert"), 0, "Enables extra validity checking in DAC - assumes target isn't corrupt")
 RETAIL_CONFIG_DWORD_INFO(INTERNAL_DbgDACSkipVerifyDlls, W("DbgDACSkipVerifyDlls"), 0, "Allows disabling the check to ensure mscordacwks and mscorwks dll versions match")
@@ -486,9 +485,6 @@ CONFIG_DWORD_INFO(INTERNAL_NoASLRForNgen, W("NoASLRForNgen"), 0, "Turn off IMAGE
 
 RETAIL_CONFIG_STRING_INFO(INTERNAL_NativeImageSearchPaths, W("NativeImageSearchPaths"), "Extra search paths for native composite R2R images")
 
-#ifdef CROSSGEN_COMPILE
-RETAIL_CONFIG_DWORD_INFO(INTERNAL_CrossGenAssumeInputSigned, W("CrossGenAssumeInputSigned"), 1, "CrossGen should assume that its input assemblies will be signed before deployment")
-#endif
 
 ///
 /// Profiling API / ETW
@@ -637,9 +633,7 @@ RETAIL_CONFIG_DWORD_INFO(INTERNAL_TieredPGO, W("TieredPGO"), 0, "Instrument Tier
 ///
 /// Entry point slot backpatch
 ///
-#ifndef CROSSGEN_COMPILE
 RETAIL_CONFIG_DWORD_INFO(UNSUPPORTED_BackpatchEntryPointSlots, W("BackpatchEntryPointSlots"), 1, "Indicates whether to enable entry point slot backpatching, for instance to avoid making virtual calls through a precode and instead to patch virtual slots for a method when its entry point changes.")
-#endif
 
 ///
 /// TypeLoader

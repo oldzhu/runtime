@@ -211,7 +211,7 @@ while [[ $# > 0 ]]; do
           ;;
         *)
           echo "Unsupported target architecture '$2'."
-          echo "The allowed values are x86, x64, arm, armel, arm64, s390x, and wasm."
+          echo "The allowed values are x86, x64, arm, armel, arm64, s390x, riscv32, riscv64 and wasm."
           exit 1
           ;;
       esac
