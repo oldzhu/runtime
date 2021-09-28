@@ -2673,9 +2673,19 @@ void Compiler::compInitOptions(JitFlags* jitFlags)
 
 #ifdef DEBUG
     opts.dspOrder = false;
+
+    // Optionally suppress inliner compiler instance dumping.
+    //
     if (compIsForInlining())
     {
-        verbose = impInlineInfo->InlinerCompiler->verbose;
+        if (JitConfig.JitDumpInlinePhases() > 0)
+        {
+            verbose = impInlineInfo->InlinerCompiler->verbose;
+        }
+        else
+        {
+            verbose = false;
+        }
     }
     else
     {
@@ -2832,6 +2842,13 @@ void Compiler::compInitOptions(JitFlags* jitFlags)
                 }
             }
         }
+    }
+
+    // Optionally suppress dumping Tier0 jit requests.
+    //
+    if (verboseDump && jitFlags->IsSet(JitFlags::JIT_FLAG_TIER0))
+    {
+        verboseDump = (JitConfig.JitDumpTier0() > 0);
     }
 
     if (verboseDump)
@@ -4476,6 +4493,11 @@ void Compiler::compCompile(void** methodCodePtr, uint32_t* methodCodeSize, JitFl
             assert(lvaStubArgumentVar == BAD_VAR_NUM);
             lvaStubArgumentVar                  = lvaGrabTempWithImplicitUse(false DEBUGARG("stub argument"));
             lvaTable[lvaStubArgumentVar].lvType = TYP_I_IMPL;
+            // TODO-CQ: there is no need to mark it as doNotEnreg. There are no stores for this local
+            // before codegen so liveness and LSRA mark it as "liveIn" and always allocate a stack slot for it.
+            // However, it would be better to process it like other argument locals and keep it in
+            // a reg for the whole method without spilling to the stack when possible.
+            lvaSetVarDoNotEnregister(lvaStubArgumentVar DEBUGARG(DoNotEnregisterReason::VMNeedsStackAddr));
         }
     };
     DoPhase(this, PHASE_PRE_IMPORT, preImportPhase);
