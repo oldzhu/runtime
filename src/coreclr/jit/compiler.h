@@ -388,7 +388,8 @@ enum class DoNotEnregisterReason
     StoreBlkSrc,    // the local is used as STORE_BLK source.
     OneAsgRetyping, // fgMorphOneAsgBlockOp prevents this local from being enregister.
     SwizzleArg,     // the local is passed using LCL_FLD as another type.
-    BlockOpRet      // the struct is returned and it promoted or there is a cast.
+    BlockOpRet,     // the struct is returned and it promoted or there is a cast.
+    ReturnSpCheck   // the local is used to do SP check
 };
 
 enum class AddressExposedReason
@@ -6212,7 +6213,7 @@ private:
 
 #endif // FEATURE_SIMD
     GenTree* fgMorphArrayIndex(GenTree* tree);
-    GenTree* fgMorphCast(GenTree* tree);
+    GenTree* fgMorphExpandCast(GenTreeCast* tree);
     GenTreeFieldList* fgMorphLclArgToFieldlist(GenTreeLclVarCommon* lcl);
     void fgInitArgInfo(GenTreeCall* call);
     GenTreeCall* fgMorphArgs(GenTreeCall* call);
@@ -6283,8 +6284,10 @@ private:
     GenTree* fgMorphCopyBlock(GenTree* tree);
     GenTree* fgMorphForRegisterFP(GenTree* tree);
     GenTree* fgMorphSmpOp(GenTree* tree, MorphAddrContext* mac = nullptr);
+    GenTree* fgOptimizeCast(GenTree* tree);
     GenTree* fgOptimizeEqualityComparisonWithConst(GenTreeOp* cmp);
     GenTree* fgOptimizeRelationalComparisonWithConst(GenTreeOp* cmp);
+    GenTree* fgPropagateCommaThrow(GenTree* parent, GenTreeOp* commaThrow, GenTreeFlags precedingSideEffects);
     GenTree* fgMorphRetInd(GenTreeUnOp* tree);
     GenTree* fgMorphModToSubMulDiv(GenTreeOp* tree);
     GenTree* fgMorphSmpOpOptional(GenTreeOp* tree);
@@ -10301,6 +10304,7 @@ public:
         unsigned m_oneAsgRetyping;
         unsigned m_swizzleArg;
         unsigned m_blockOpRet;
+        unsigned m_returnSpCheck;
         unsigned m_liveInOutHndlr;
         unsigned m_depField;
         unsigned m_noRegVars;
