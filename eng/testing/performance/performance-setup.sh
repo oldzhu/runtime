@@ -273,7 +273,11 @@ if [[ "$monoaot" == "true" ]]; then
     extra_benchmark_dotnet_arguments="$extra_benchmark_dotnet_arguments --category-exclusion-filter NoAOT"
 fi
 
-common_setup_arguments="--channel main --queue $queue --build-number $build_number --build-configs $configurations --architecture $architecture"
+cleaned_branch_name="main"
+if [[ $branch == *"refs/heads/release"* ]]; then
+    cleaned_branch_name=${branch/refs\/heads\//}
+fi
+common_setup_arguments="--channel $cleaned_branch_name --queue $queue --build-number $build_number --build-configs $configurations --architecture $architecture"
 setup_arguments="--repository https://github.com/$repository --branch $branch --get-perf-hash --commit-sha $commit_sha $common_setup_arguments"
 
 if [[ "$run_from_perf_repo" = true ]]; then
@@ -288,7 +292,8 @@ else
 	if [ "$?" -ne "0" ]; then
 		echo "git clone failed with code $?"
 		exit 1
-
+	fi
+	
     docs_directory=$performance_directory/docs
     verified_mv $docs_directory $workitem_directory
 fi
