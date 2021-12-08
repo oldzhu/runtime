@@ -5584,6 +5584,10 @@ int Compiler::compCompile(CORINFO_MODULE_HANDLE classPtr,
         assert(info.compPatchpointInfo != nullptr);
     }
 
+#if defined(TARGET_ARM64)
+    compFrameInfo = {0};
+#endif
+
     virtualStubParamInfo = new (this, CMK_Unknown) VirtualStubParamInfo(IsTargetAbi(CORINFO_CORERT_ABI));
 
     // compMatchedVM is set to true if both CPU/ABI and OS are matching the execution engine requirements
@@ -9398,6 +9402,11 @@ void cTreeFlags(Compiler* comp, GenTree* tree)
                     case GTF_ICON_BBC_PTR:
 
                         chars += printf("[ICON_BBC_PTR]");
+                        break;
+
+                    case GTF_ICON_STATIC_BOX_PTR:
+
+                        chars += printf("[GTF_ICON_STATIC_BOX_PTR]");
                         break;
 
                     case GTF_ICON_FIELD_OFF:
