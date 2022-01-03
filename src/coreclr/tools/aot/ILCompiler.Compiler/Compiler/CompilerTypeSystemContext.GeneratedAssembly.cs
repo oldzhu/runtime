@@ -4,14 +4,16 @@
 using System;
 using System.Collections.Generic;
 
+using Internal.TypeSystem;
+
 using TypeHashingAlgorithms = Internal.NativeFormat.TypeHashingAlgorithms;
 using Interlocked = System.Threading.Interlocked;
 using AssemblyName = System.Reflection.AssemblyName;
 using Debug = System.Diagnostics.Debug;
 
-namespace Internal.TypeSystem
+namespace ILCompiler
 {
-    partial class TypeSystemContext
+    partial class CompilerTypeSystemContext
     {
         private ModuleDesc _generatedAssembly;
 
@@ -89,7 +91,23 @@ namespace Internal.TypeSystem
                 get;
             }
 
+            public override string DiagnosticName
+            {
+                get
+                {
+                    return Name;
+                }
+            }
+
             public override string Namespace
+            {
+                get
+                {
+                    return "Internal.CompilerGenerated";
+                }
+            }
+
+            public override string DiagnosticNamespace
             {
                 get
                 {
