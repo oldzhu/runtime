@@ -195,7 +195,7 @@ while [[ $# > 0 ]]; do
           exit 0
         fi
         arguments="$arguments /p:Subset=$2"
-        shift 2
+					shift 2
       fi
       ;;
 
