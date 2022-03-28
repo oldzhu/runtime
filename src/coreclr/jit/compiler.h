@@ -6507,6 +6507,7 @@ private:
     GenTree* fgOptimizeAddition(GenTreeOp* add);
     GenTree* fgOptimizeMultiply(GenTreeOp* mul);
     GenTree* fgOptimizeBitwiseAnd(GenTreeOp* andOp);
+    GenTree* fgOptimizeBitwiseXor(GenTreeOp* xorOp);
     GenTree* fgPropagateCommaThrow(GenTree* parent, GenTreeOp* commaThrow, GenTreeFlags precedingSideEffects);
     GenTree* fgMorphRetInd(GenTreeUnOp* tree);
     GenTree* fgMorphModToSubMulDiv(GenTreeOp* tree);
@@ -8469,6 +8470,7 @@ public:
 
 #if defined(DEBUG)
     const WCHAR* eeGetCPString(size_t stringHandle);
+    const char16_t* eeGetShortClassName(CORINFO_CLASS_HANDLE clsHnd);
 #endif
 
     const char* eeGetClassName(CORINFO_CLASS_HANDLE clsHnd);
