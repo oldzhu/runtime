@@ -592,6 +592,9 @@ public:
                                          // the prolog. If the local has gc pointers, there are no gc-safe points
                                          // between the prolog and the explicit initialization.
 
+    unsigned char lvIsOSRLocal : 1; // Root method local in an OSR method. Any stack home will be on the Tier0 frame.
+                                    // Initial value will be defined by Tier0. Requires special handing in prolog.
+
     union {
         unsigned lvFieldLclStart; // The index of the local var representing the first field in the promoted struct
                                   // local.  For implicit byref parameters, this gets hijacked between
@@ -4985,7 +4988,7 @@ private:
     bool impIsClassExact(CORINFO_CLASS_HANDLE classHnd);
     bool impCanSkipCovariantStoreCheck(GenTree* value, GenTree* array);
 
-    CORINFO_RESOLVED_TOKEN* impAllocateToken(const CORINFO_RESOLVED_TOKEN& token);
+    methodPointerInfo* impAllocateMethodPointerInfo(const CORINFO_RESOLVED_TOKEN& token, mdToken tokenConstrained);
 
     /*
     XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
@@ -5194,7 +5197,6 @@ public:
     bool     fgHaveValidEdgeWeights;   // true if we were successful in computing all of the edge weights
     bool     fgSlopUsedInEdgeWeights;  // true if their was some slop used when computing the edge weights
     bool     fgRangeUsedInEdgeWeights; // true if some of the edgeWeight are expressed in Min..Max form
-    bool     fgNeedsUpdateFlowGraph;   // true if we need to run fgUpdateFlowGraph
     weight_t fgCalledCount;            // count of the number of times this method was called
                                        // This is derived from the profile data
                                        // or is BB_UNITY_WEIGHT when we don't have profile data
@@ -5772,9 +5774,13 @@ protected:
 
     void fgComputeEnterBlocksSet(); // Compute the set of entry blocks, 'fgEnterBlks'.
 
-    bool fgRemoveUnreachableBlocks(); // Remove blocks determined to be unreachable by the bbReach sets.
+    // Remove blocks determined to be unreachable by the 'canRemoveBlock'.
+    template <typename CanRemoveBlockBody>
+    bool fgRemoveUnreachableBlocks(CanRemoveBlockBody canRemoveBlock);
 
     void fgComputeReachability(); // Perform flow graph node reachability analysis.
+
+    void fgRemoveDeadBlocks(); // Identify and remove dead blocks.
 
     BasicBlock* fgIntersectDom(BasicBlock* a, BasicBlock* b); // Intersect two immediate dominator sets.
 
@@ -6484,7 +6490,7 @@ private:
 #endif
     GenTree* fgOptimizeDelegateConstructor(GenTreeCall*            call,
                                            CORINFO_CONTEXT_HANDLE* ExactContextHnd,
-                                           CORINFO_RESOLVED_TOKEN* ldftnToken);
+                                           methodPointerInfo*      ldftnToken);
     GenTree* fgMorphLeaf(GenTree* tree);
     void fgAssignSetVarDef(GenTree* tree);
     GenTree* fgMorphOneAsgBlockOp(GenTree* tree);
