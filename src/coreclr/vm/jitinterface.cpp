@@ -8931,12 +8931,8 @@ CORINFO_CLASS_HANDLE CEEInfo::getDefaultEqualityComparerClassHelper(CORINFO_CLAS
     if (Nullable::IsNullableType(elemTypeHnd))
     {
         Instantiation nullableInst = elemTypeHnd.AsMethodTable()->GetInstantiation();
-        TypeHandle iequatable = TypeHandle(CoreLibBinder::GetClass(CLASS__IEQUATABLEGENERIC)).Instantiate(nullableInst);
-        if (nullableInst[0].CanCastTo(iequatable))
-        {
-            TypeHandle resultTh = ((TypeHandle)CoreLibBinder::GetClass(CLASS__NULLABLE_EQUALITYCOMPARER)).Instantiate(nullableInst);
-            return CORINFO_CLASS_HANDLE(resultTh.GetMethodTable());
-        }
+        TypeHandle resultTh = ((TypeHandle)CoreLibBinder::GetClass(CLASS__NULLABLE_EQUALITYCOMPARER)).Instantiate(nullableInst);
+        return CORINFO_CLASS_HANDLE(resultTh.GetMethodTable());
     }
 
     // Enum
@@ -12923,15 +12919,19 @@ PCODE UnsafeJitFunction(PrepareCodeConfig* config,
             {
                 LARGE_INTEGER methodJitTimeStop;
                 QueryPerformanceCounter(&methodJitTimeStop);
+
+                SString moduleName;
+                ftn->GetModule()->GetDomainAssembly()->GetPEAssembly()->GetPathOrCodeBase(moduleName);
+                MAKE_UTF8PTR_FROMWIDE(moduleNameUtf8, moduleName.GetUnicode());
+
                 SString codeBase;
-                ftn->GetModule()->GetDomainAssembly()->GetPEAssembly()->GetPathOrCodeBase(codeBase);
-                codeBase.AppendPrintf(W(",0x%x,%d,%d\n"),
-                                 //(const WCHAR *)codeBase, //module name
+                codeBase.AppendPrintf("%s,0x%x,%d,%d\n",
+                                 moduleNameUtf8, //module name
                                  ftn->GetMemberDef(), //method token
                                  (unsigned)(methodJitTimeStop.QuadPart - methodJitTimeStart.QuadPart), //cycle count
                                  methodInfo.ILCodeSize //il size
                                 );
-                WszOutputDebugString((const WCHAR*)codeBase);
+                OutputDebugStringUtf8(codeBase.GetUTF8NoConvert());
             }
 #endif // PERF_TRACK_METHOD_JITTIMES
 
