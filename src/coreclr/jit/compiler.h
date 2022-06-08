@@ -2587,7 +2587,19 @@ public:
 
     GenTreeField* gtNewFieldRef(var_types type, CORINFO_FIELD_HANDLE fldHnd, GenTree* obj = nullptr, DWORD offset = 0);
 
-    GenTree* gtNewIndexRef(var_types typ, GenTree* arrayOp, GenTree* indexOp);
+    GenTreeIndexAddr* gtNewIndexAddr(GenTree*             arrayOp,
+                                     GenTree*             indexOp,
+                                     var_types            elemType,
+                                     CORINFO_CLASS_HANDLE elemClassHandle,
+                                     unsigned             firstElemOffset,
+                                     unsigned             lengthOffset);
+
+    GenTreeIndexAddr* gtNewArrayIndexAddr(GenTree*             arrayOp,
+                                          GenTree*             indexOp,
+                                          var_types            elemType,
+                                          CORINFO_CLASS_HANDLE elemClassHandle);
+
+    GenTreeIndir* gtNewIndexIndir(GenTreeIndexAddr* indexAddr);
 
     GenTreeArrLen* gtNewArrLen(var_types typ, GenTree* arrayOp, int lenOffset, BasicBlock* block);
 
@@ -2758,6 +2770,7 @@ public:
 
     GenTree* gtFoldExpr(GenTree* tree);
     GenTree* gtFoldExprConst(GenTree* tree);
+    GenTree* gtFoldIndirConst(GenTreeIndir* indir);
     GenTree* gtFoldExprSpecial(GenTree* tree);
     GenTree* gtFoldBoxNullable(GenTree* tree);
     GenTree* gtFoldExprCompare(GenTree* tree);
@@ -5627,7 +5640,7 @@ private:
     Statement* fgPreviousCandidateSIMDFieldAsgStmt;
 
 #endif // FEATURE_SIMD
-    GenTree* fgMorphArrayIndex(GenTree* tree);
+    GenTree* fgMorphIndexAddr(GenTreeIndexAddr* tree);
     GenTree* fgMorphExpandCast(GenTreeCast* tree);
     GenTreeFieldList* fgMorphLclArgToFieldlist(GenTreeLclVarCommon* lcl);
     GenTreeCall* fgMorphArgs(GenTreeCall* call);
@@ -5695,7 +5708,7 @@ private:
     GenTree* fgMorphInitBlock(GenTree* tree);
     GenTree* fgMorphPromoteLocalInitBlock(GenTreeLclVar* destLclNode, GenTree* initVal, unsigned blockSize);
     GenTree* fgMorphGetStructAddr(GenTree** pTree, CORINFO_CLASS_HANDLE clsHnd, bool isRValue = false);
-    GenTree* fgMorphBlockOperand(GenTree* tree, var_types asgType, unsigned blockWidth, bool isBlkReqd);
+    GenTree* fgMorphBlockOperand(GenTree* tree, var_types asgType, ClassLayout* blockLayout, bool isBlkReqd);
     GenTree* fgMorphCopyBlock(GenTree* tree);
     GenTree* fgMorphStoreDynBlock(GenTreeStoreDynBlk* tree);
     GenTree* fgMorphForRegisterFP(GenTree* tree);
@@ -7986,6 +7999,10 @@ private:
 
     void unwindReserveFuncHelper(FuncInfoDsc* func, bool isHotCode);
     void unwindEmitFuncHelper(FuncInfoDsc* func, void* pHotCode, void* pColdCode, bool isHotCode);
+
+#ifdef DEBUG
+    void fakeUnwindEmitFuncHelper(FuncInfoDsc* func, void* pHotCode);
+#endif // DEBUG
 
 #endif // TARGET_AMD64 || (TARGET_X86 && FEATURE_EH_FUNCLETS)
 
