@@ -614,8 +614,6 @@ public:
     unsigned char lvSingleDefDisqualifyReason = 'H';
 #endif
 
-    unsigned char lvAllDefsAreNoGc : 1; // For pinned locals: true if all defs of this local are no-gc
-
 #if FEATURE_MULTIREG_ARGS
     regNumber lvRegNumForSlot(unsigned slotNum)
     {
@@ -1884,11 +1882,6 @@ public:
     //
 
     bool IsHfa(CORINFO_CLASS_HANDLE hClass);
-    bool IsHfa(GenTree* tree);
-
-    var_types GetHfaType(GenTree* tree);
-    unsigned GetHfaCount(GenTree* tree);
-
     var_types GetHfaType(CORINFO_CLASS_HANDLE hClass);
     unsigned GetHfaCount(CORINFO_CLASS_HANDLE hClass);
 
