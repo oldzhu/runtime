@@ -6,6 +6,7 @@ using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Runtime.ExceptionServices;
 using System.Threading;
 
 namespace System.Text.Json.Serialization.Metadata
@@ -16,6 +17,8 @@ namespace System.Text.Json.Serialization.Metadata
     [DebuggerDisplay("{DebuggerDisplay,nq}")]
     public abstract partial class JsonTypeInfo
     {
+        internal const string MetadataFactoryRequiresUnreferencedCode = "JSON serialization and deserialization might require types that cannot be statically analyzed and might need runtime code generation. Use System.Text.Json source generation for native AOT applications.";
+
         internal const string JsonObjectTypeName = "System.Text.Json.Nodes.JsonObject";
 
         internal delegate T ParameterizedConstructorDelegate<T, TArg0, TArg1, TArg2, TArg3>(TArg0 arg0, TArg1 arg1, TArg2 arg2, TArg3 arg3);
@@ -309,12 +312,7 @@ namespace System.Text.Json.Serialization.Metadata
         /// <summary>
         /// Converter associated with the type for the given options instance
         /// </summary>
-        public JsonConverter Converter
-            // For JsonTypeInfo CustomConverter is always null
-            // while NonCustomConverter always contains final converter.
-            // This property can be used before JsonTypeInfo is configured (especially in SourceGen case)
-            // therefore it's safer to return NonCustomConverter rather than EffectiveConverter.
-            => PropertyInfoForTypeInfo.DefaultConverterForType!;
+        public JsonConverter Converter { get; }
 
         /// <summary>
         /// Determines the kind of contract metadata current JsonTypeInfo instance is customizing
@@ -337,7 +335,9 @@ namespace System.Text.Json.Serialization.Metadata
         /// TypeInfo (for the cases mentioned above). In addition, methods that have a JsonPropertyInfo argument would also likely
         /// need to add an argument for JsonTypeInfo.
         /// </remarks>
-        internal JsonPropertyInfo PropertyInfoForTypeInfo { get; private set; }
+        internal JsonPropertyInfo PropertyInfoForTypeInfo { get; }
+
+        private protected abstract JsonPropertyInfo CreatePropertyInfoForTypeInfo();
 
         /// <summary>
         /// Returns a helper class used for computing the default value.
@@ -367,7 +367,8 @@ namespace System.Text.Json.Serialization.Metadata
         {
             Type = type;
             Options = options;
-            PropertyInfoForTypeInfo = CreatePropertyInfoForTypeInfo(this, converter);
+            Converter = converter;
+            PropertyInfoForTypeInfo = CreatePropertyInfoForTypeInfo();
             ElementType = converter.ElementType;
 
             switch (PropertyInfoForTypeInfo.ConverterStrategy)
@@ -404,22 +405,38 @@ namespace System.Text.Json.Serialization.Metadata
 
         private protected volatile bool _isConfigured;
         private readonly object _configureLock = new object();
+        private ExceptionDispatchInfo? _cachedConfigureError;
 
         internal bool IsConfigured => _isConfigured;
 
         internal void EnsureConfigured()
         {
-            if (_isConfigured)
-                return;
+            if (!_isConfigured)
+                ConfigureLocked();
 
-            lock (_configureLock)
+            void ConfigureLocked()
             {
-                if (_isConfigured)
-                    return;
+                _cachedConfigureError?.Throw();
 
-                Configure();
+                lock (_configureLock)
+                {
+                    if (_isConfigured)
+                        return;
 
-                _isConfigured = true;
+                    _cachedConfigureError?.Throw();
+
+                    try
+                    {
+                        Configure();
+
+                        _isConfigured = true;
+                    }
+                    catch (Exception e)
+                    {
+                        _cachedConfigureError = ExceptionDispatchInfo.Capture(e);
+                        throw;
+                    }
+                }
             }
         }
 
@@ -539,15 +556,16 @@ namespace System.Text.Json.Serialization.Metadata
         /// <typeparam name="T">Type for which JsonTypeInfo stores metadata for</typeparam>
         /// <param name="options">Options associated with JsonTypeInfo</param>
         /// <returns>JsonTypeInfo instance</returns>
-        [RequiresUnreferencedCode("JSON serialization and deserialization might require types that cannot be statically analyzed and might need runtime code generation. Use generic overload or System.Text.Json source generation for native AOT applications.")]
-        [RequiresDynamicCode("JSON serialization and deserialization might require types that cannot be statically analyzed and might need runtime code generation. Use generic overload or System.Text.Json source generation for native AOT applications.")]
+        [RequiresUnreferencedCode(MetadataFactoryRequiresUnreferencedCode)]
+        [RequiresDynamicCode(MetadataFactoryRequiresUnreferencedCode)]
         public static JsonTypeInfo<T> CreateJsonTypeInfo<T>(JsonSerializerOptions options)
         {
             if (options == null)
             {
-                throw new ArgumentNullException(nameof(options));
+                ThrowHelper.ThrowArgumentNullException(nameof(options));
             }
 
+            DefaultJsonTypeInfoResolver.RootDefaultInstance();
             return new CustomJsonTypeInfo<T>(options);
         }
 
@@ -559,18 +577,18 @@ namespace System.Text.Json.Serialization.Metadata
         /// <param name="type">Type for which JsonTypeInfo stores metadata for</param>
         /// <param name="options">Options associated with JsonTypeInfo</param>
         /// <returns>JsonTypeInfo instance</returns>
-        [RequiresUnreferencedCode("JSON serialization and deserialization might require types that cannot be statically analyzed and might need runtime code generation. Use generic overload or System.Text.Json source generation for native AOT applications.")]
-        [RequiresDynamicCode("JSON serialization and deserialization might require types that cannot be statically analyzed and might need runtime code generation. Use generic overload or System.Text.Json source generation for native AOT applications.")]
+        [RequiresUnreferencedCode(MetadataFactoryRequiresUnreferencedCode)]
+        [RequiresDynamicCode(MetadataFactoryRequiresUnreferencedCode)]
         public static JsonTypeInfo CreateJsonTypeInfo(Type type, JsonSerializerOptions options)
         {
             if (type == null)
             {
-                throw new ArgumentNullException(nameof(type));
+                ThrowHelper.ThrowArgumentNullException(nameof(type));
             }
 
             if (options == null)
             {
-                throw new ArgumentNullException(nameof(options));
+                ThrowHelper.ThrowArgumentNullException(nameof(options));
             }
 
             if (IsInvalidForSerialization(type))
@@ -578,6 +596,7 @@ namespace System.Text.Json.Serialization.Metadata
                 ThrowHelper.ThrowArgumentException_CannotSerializeInvalidType(nameof(type), type, null, null);
             }
 
+            DefaultJsonTypeInfoResolver.RootDefaultInstance();
             s_createJsonTypeInfo ??= typeof(JsonTypeInfo).GetMethod(nameof(CreateJsonTypeInfo), new Type[] { typeof(JsonSerializerOptions) })!;
             return (JsonTypeInfo)s_createJsonTypeInfo.MakeGenericMethod(type)
                 .Invoke(null, new object[] { options })!;
@@ -589,16 +608,18 @@ namespace System.Text.Json.Serialization.Metadata
         /// <param name="propertyType">Type of the property</param>
         /// <param name="name">Name of the property</param>
         /// <returns>JsonPropertyInfo instance</returns>
+        [RequiresUnreferencedCode(MetadataFactoryRequiresUnreferencedCode)]
+        [RequiresDynamicCode(MetadataFactoryRequiresUnreferencedCode)]
         public JsonPropertyInfo CreateJsonPropertyInfo(Type propertyType, string name)
         {
             if (propertyType == null)
             {
-                throw new ArgumentNullException(nameof(propertyType));
+                ThrowHelper.ThrowArgumentNullException(nameof(propertyType));
             }
 
             if (name == null)
             {
-                throw new ArgumentNullException(nameof(name));
+                ThrowHelper.ThrowArgumentNullException(nameof(name));
             }
 
             if (IsInvalidForSerialization(propertyType))
@@ -607,7 +628,7 @@ namespace System.Text.Json.Serialization.Metadata
             }
 
             JsonConverter converter = Options.GetConverterForType(propertyType);
-            JsonPropertyInfo propertyInfo = CreateProperty(propertyType, converter);
+            JsonPropertyInfo propertyInfo = CreatePropertyUsingReflection(propertyType, converter);
             propertyInfo.Name = name;
 
             return propertyInfo;
