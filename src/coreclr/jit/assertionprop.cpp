@@ -175,6 +175,17 @@ bool IntegralRange::Contains(int64_t value) const
             }
             break;
 
+        case GT_CNS_INT:
+            if (node->IsIntegralConst(0) || node->IsIntegralConst(1))
+            {
+                return {SymbolicIntegerValue::Zero, SymbolicIntegerValue::One};
+            }
+            break;
+
+        case GT_QMARK:
+            return Union(ForNode(node->AsQmark()->ThenNode(), compiler),
+                         ForNode(node->AsQmark()->ElseNode(), compiler));
+
         case GT_CAST:
             return ForCastOutput(node->AsCast());
 
@@ -428,6 +439,12 @@ bool IntegralRange::Contains(int64_t value) const
     }
 
     return {lowerBound, upperBound};
+}
+
+/* static */ IntegralRange IntegralRange::Union(IntegralRange range1, IntegralRange range2)
+{
+    return IntegralRange(min(range1.GetLowerBound(), range2.GetLowerBound()),
+                         max(range1.GetUpperBound(), range2.GetUpperBound()));
 }
 
 #ifdef DEBUG
@@ -3803,33 +3820,12 @@ GenTree* Compiler::optAssertionProp_LclFld(ASSERT_VALARG_TP assertions, GenTreeL
             break;
         }
 
-        // See if the variable is equal to another variable or a constant.
+        // See if the variable is equal to another variable.
         //
         AssertionDsc* const curAssertion = optGetAssertion(assertionIndex);
-        if (!curAssertion->CanPropLclVar())
-        {
-            continue;
-        }
-
-        // Copy prop
-        //
-        if (curAssertion->op2.kind == O2K_LCLVAR_COPY)
+        if (curAssertion->CanPropLclVar() && (curAssertion->op2.kind == O2K_LCLVAR_COPY))
         {
             GenTree* const newTree = optCopyAssertionProp(curAssertion, tree, stmt DEBUGARG(assertionIndex));
-            if (newTree != nullptr)
-            {
-                return newTree;
-            }
-
-            continue;
-        }
-
-        // Constant prop
-        //
-        if (curAssertion->op1.lcl.lclNum == tree->GetLclNum())
-        {
-            GenTree* const newTree = optConstantAssertionProp(curAssertion, tree, stmt DEBUGARG(assertionIndex));
-
             if (newTree != nullptr)
             {
                 return newTree;
