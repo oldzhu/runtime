@@ -1307,6 +1307,17 @@ Compiler::AssertionDsc* Compiler::optGetAssertion(AssertionIndex assertIndex)
     return assertion;
 }
 
+ValueNum Compiler::optConservativeNormalVN(GenTree* tree)
+{
+    if (optLocalAssertionProp)
+    {
+        return ValueNumStore::NoVN;
+    }
+
+    assert(vnStore != nullptr);
+    return vnStore->VNConservativeNormalValue(tree->gtVNPair);
+}
+
 //------------------------------------------------------------------------
 // optCastConstantSmall: Cast a constant to a small type.
 //
@@ -3197,7 +3208,8 @@ GenTree* Compiler::optVNConstantPropOnTree(BasicBlock* block, GenTree* tree)
 
         case TYP_SIMD32:
         {
-            simd32_t       value  = vnStore->ConstantValue<simd32_t>(vnCns);
+            simd32_t value = vnStore->ConstantValue<simd32_t>(vnCns);
+
             GenTreeVecCon* vecCon = gtNewVconNode(tree->TypeGet());
             vecCon->gtSimd32Val   = value;
 

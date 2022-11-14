@@ -2509,15 +2509,27 @@ AGAIN:
 
                 case GT_BLK:
                 case GT_OBJ:
-                    if ((op1->gtFlags & (GTF_IND_FLAGS)) != (op2->gtFlags & (GTF_IND_FLAGS)))
+                    if (op1->AsBlk()->GetLayout() != op2->AsBlk()->GetLayout())
                     {
                         return false;
                     }
-                    FALLTHROUGH;
+
+                    if ((op1->gtFlags & GTF_IND_FLAGS) != (op2->gtFlags & GTF_IND_FLAGS))
+                    {
+                        return false;
+                    }
+
+                    break;
 
                 case GT_IND:
                 case GT_NULLCHECK:
-                    if ((op1->gtFlags & (GTF_IND_FLAGS)) != (op2->gtFlags & (GTF_IND_FLAGS)))
+                    if (op1->TypeIs(TYP_STRUCT))
+                    {
+                        // Rare case -- need contextual information to check equality in some cases.
+                        return false;
+                    }
+
+                    if ((op1->gtFlags & GTF_IND_FLAGS) != (op2->gtFlags & GTF_IND_FLAGS))
                     {
                         return false;
                     }
@@ -18077,16 +18089,6 @@ CORINFO_CLASS_HANDLE Compiler::gtGetClassHandle(GenTree* tree, bool* pIsExact, b
                                 objClass = fieldClass;
                             }
                         }
-                    }
-                }
-                else if (base->IsIconHandle(GTF_ICON_CONST_PTR, GTF_ICON_STATIC_HDL))
-                {
-                    // Check if we have IND(ICON_HANDLE) that represents a static field
-                    FieldSeq* fldSeq = base->AsIntCon()->gtFieldSeq;
-                    if ((fldSeq != nullptr) && (fldSeq->GetOffset() == base->AsIntCon()->IconValue()))
-                    {
-                        CORINFO_FIELD_HANDLE fldHandle = base->AsIntCon()->gtFieldSeq->GetFieldHandle();
-                        objClass                       = gtGetFieldClassHandle(fldHandle, pIsExact, pIsNonNull);
                     }
                 }
             }
