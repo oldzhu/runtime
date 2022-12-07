@@ -4,16 +4,11 @@
 
 using System;
 using System.Diagnostics;
-using System.Runtime;
 using System.Runtime.InteropServices;
 
-using Internal.Runtime;
 using Internal.Runtime.Augments;
-using Internal.Runtime.TypeLoader;
 using System.Collections.Generic;
-using System.Threading;
 
-using Internal.Metadata.NativeFormat;
 using Internal.TypeSystem;
 
 namespace Internal.Runtime.TypeLoader
@@ -149,7 +144,6 @@ namespace Internal.Runtime.TypeLoader
             bool successful = false;
             IntPtr eeTypePtrPlusGCDesc = IntPtr.Zero;
             IntPtr writableDataPtr = IntPtr.Zero;
-            DynamicModule* dynamicModulePtr = null;
             IntPtr gcStaticData = IntPtr.Zero;
             IntPtr nonGcStaticData = IntPtr.Zero;
             IntPtr genericComposition = IntPtr.Zero;
@@ -167,10 +161,6 @@ namespace Internal.Runtime.TypeLoader
                     pTemplateEEType = pTemplateEEType->DynamicTemplateType;
                 }
 
-                ModuleInfo moduleInfo = TypeLoaderEnvironment.GetModuleInfoForType(state.TypeBeingBuilt);
-                dynamicModulePtr = moduleInfo.DynamicModulePtr;
-                Debug.Assert(dynamicModulePtr != null);
-
                 uint valueTypeFieldPaddingEncoded = 0;
                 int baseSize = 0;
 
@@ -181,7 +171,6 @@ namespace Internal.Runtime.TypeLoader
                 bool isGeneric;
                 uint flags;
                 ushort runtimeInterfacesLength = 0;
-                bool isGenericEETypeDef = false;
                 bool isAbstractClass;
                 bool isByRefLike;
                 IntPtr typeManager = IntPtr.Zero;
@@ -191,48 +180,21 @@ namespace Internal.Runtime.TypeLoader
                     runtimeInterfacesLength = checked((ushort)state.RuntimeInterfaces.Length);
                 }
 
-                if (pTemplateEEType != null)
-                {
-                    valueTypeFieldPaddingEncoded = EETypeBuilderHelpers.ComputeValueTypeFieldPaddingFieldValue(
-                        pTemplateEEType->ValueTypeFieldPadding,
-                        (uint)pTemplateEEType->FieldAlignmentRequirement,
-                        IntPtr.Size);
-                    baseSize = (int)pTemplateEEType->BaseSize;
-                    isValueType = pTemplateEEType->IsValueType;
-                    hasFinalizer = pTemplateEEType->IsFinalizable;
-                    isNullable = pTemplateEEType->IsNullable;
-                    flags = pTemplateEEType->Flags;
-                    isArray = pTemplateEEType->IsArray;
-                    isGeneric = pTemplateEEType->IsGeneric;
-                    isAbstractClass = pTemplateEEType->IsAbstract && !pTemplateEEType->IsInterface;
-                    isByRefLike = pTemplateEEType->IsByRefLike;
-                    typeManager = pTemplateEEType->PointerToTypeManager;
-                    Debug.Assert(pTemplateEEType->NumInterfaces == runtimeInterfacesLength);
-                }
-                else if (state.TypeBeingBuilt.IsGenericDefinition)
-                {
-                    // is this SUPPORTS_NATIVE_METADATA_TYPE_LOADING?
-                    Debug.Assert(false);
-                    flags = EETypeBuilderHelpers.ComputeFlags(state.TypeBeingBuilt);
-                    Debug.Assert((flags & (uint)EETypeFlags.HasComponentSizeFlag) != 0);
-                    flags |= checked((ushort)state.TypeBeingBuilt.Instantiation.Length);
-
-                    isValueType = state.TypeBeingBuilt.IsValueType;
-                    hasFinalizer = false;
-                    isArray = false;
-                    isNullable = false;
-                    isGeneric = false;
-                    isGenericEETypeDef = true;
-                    isAbstractClass = false;
-                    isByRefLike = false;
-                    baseSize = 0;
-                    typeManager = PermanentAllocatedMemoryBlobs.GetPointerToIntPtr(moduleInfo.Handle.GetIntPtrUNSAFE());
-                }
-                else
-                {
-                    Debug.Fail("This code path should be unreachable (universal generics).");
-                    throw new UnreachableException();
-                }
+                valueTypeFieldPaddingEncoded = EETypeBuilderHelpers.ComputeValueTypeFieldPaddingFieldValue(
+                    pTemplateEEType->ValueTypeFieldPadding,
+                    (uint)pTemplateEEType->FieldAlignmentRequirement,
+                    IntPtr.Size);
+                baseSize = (int)pTemplateEEType->BaseSize;
+                isValueType = pTemplateEEType->IsValueType;
+                hasFinalizer = pTemplateEEType->IsFinalizable;
+                isNullable = pTemplateEEType->IsNullable;
+                flags = pTemplateEEType->Flags;
+                isArray = pTemplateEEType->IsArray;
+                isGeneric = pTemplateEEType->IsGeneric;
+                isAbstractClass = pTemplateEEType->IsAbstract && !pTemplateEEType->IsInterface;
+                isByRefLike = pTemplateEEType->IsByRefLike;
+                typeManager = pTemplateEEType->PointerToTypeManager;
+                Debug.Assert(pTemplateEEType->NumInterfaces == runtimeInterfacesLength);
 
                 flags |= (uint)EETypeFlags.IsDynamicTypeFlag;
 
@@ -337,8 +299,6 @@ namespace Internal.Runtime.TypeLoader
                         optionalFields.ClearField(EETypeOptionalFieldTag.NullableValueOffset);
                     }
 
-                    rareFlags |= (uint)EETypeRareFlags.HasDynamicModuleFlag;
-
                     optionalFields.SetFieldValue(EETypeOptionalFieldTag.RareFlags, rareFlags);
 
                     // Dispatch map is fetched from template type
@@ -381,9 +341,6 @@ namespace Internal.Runtime.TypeLoader
                     // Dynamic types have an extra pointer-sized field that contains a pointer to their template type
                     cbEEType += IntPtr.Size;
 
-                    // Add another pointer sized field for a DynamicModule
-                    cbEEType += IntPtr.Size;
-
                     int cbGCDesc = GetInstanceGCDescSize(state, pTemplateEEType, isValueType, isArray);
                     int cbGCDescAligned = MemoryHelpers.AlignUp(cbGCDesc, IntPtr.Size);
 
@@ -414,38 +371,11 @@ namespace Internal.Runtime.TypeLoader
                     pEEType->OptionalFieldsPtr = (byte*)pEEType + cbEEType;
                     optionalFields.WriteToEEType(pEEType, cbOptionalFieldsSize);
 
-                    pEEType->DynamicModule = dynamicModulePtr;
-
                     // Copy VTable entries from template type
-                    // FEATURE_UNIVERSAL_GENERICS can be simplified to just copy memory
-                    int numSlotsFilled = 0;
                     IntPtr* pVtable = (IntPtr*)((byte*)pEEType + sizeof(MethodTable));
-                    if (pTemplateEEType != null)
-                    {
-                        IntPtr* pTemplateVtable = (IntPtr*)((byte*)pTemplateEEType + sizeof(MethodTable));
-                        for (int i = 0; i < pTemplateEEType->NumVtableSlots; i++)
-                        {
-                            int vtableSlotInDynamicType = i;
-                            if (vtableSlotInDynamicType != -1)
-                            {
-                                Debug.Assert(vtableSlotInDynamicType < numVtableSlots);
-                                pVtable[vtableSlotInDynamicType] = pTemplateVtable[i];
-                                numSlotsFilled++;
-                            }
-                        }
-                    }
-                    else if (isGenericEETypeDef)
-                    {
-                        // If creating a Generic Type Definition
-                        Debug.Assert(pEEType->NumVtableSlots == 0);
-                    }
-                    else
-                    {
-                        // SUPPORTS_NATIVE_METADATA_TYPE_LOADING restructure the ifs
-                        Environment.FailFast("Template type loader is null, but metadata based type loader is not in use");
-                    }
-
-                    Debug.Assert(numSlotsFilled == numVtableSlots);
+                    IntPtr* pTemplateVtable = (IntPtr*)((byte*)pTemplateEEType + sizeof(MethodTable));
+                    for (int i = 0; i < numVtableSlots; i++)
+                        pVtable[i] = pTemplateVtable[i];
 
                     // Copy Pointer to finalizer method from the template type
                     if (hasFinalizer)
@@ -480,7 +410,7 @@ namespace Internal.Runtime.TypeLoader
 
                 int nonGCStaticDataOffset = 0;
 
-                if (!isArray && !isGenericEETypeDef)
+                if (!isArray)
                 {
                     nonGCStaticDataOffset = state.HasStaticConstructor ? -TypeBuilder.ClassConstructorOffset : 0;
 
@@ -502,7 +432,7 @@ namespace Internal.Runtime.TypeLoader
                     }
                 }
 
-                if (!isGenericEETypeDef && state.ThreadDataSize != 0)
+                if (state.ThreadDataSize != 0)
                 {
                     state.ThreadStaticOffset = TypeLoaderEnvironment.Instance.GetNextThreadStaticsOffsetValue(pEEType->TypeManager);
 
@@ -512,7 +442,7 @@ namespace Internal.Runtime.TypeLoader
                     pEEType->DynamicThreadStaticsIndex = threadStaticIndex;
                 }
 
-                if (!isGenericEETypeDef && state.GcDataSize != 0)
+                if (state.GcDataSize != 0)
                 {
                     // Statics are allocated on GC heap
                     object obj = RuntimeAugments.NewObject(((MethodTable*)state.GcStaticDesc)->ToRuntimeTypeHandle());
