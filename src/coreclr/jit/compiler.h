@@ -3245,9 +3245,6 @@ public:
 
     unsigned lvaInlinedPInvokeFrameVar; // variable representing the InlinedCallFrame
     unsigned lvaReversePInvokeFrameVar; // variable representing the reverse PInvoke frame
-#if FEATURE_FIXED_OUT_ARGS
-    unsigned lvaPInvokeFrameRegSaveVar; // variable representing the RegSave for PInvoke inlining.
-#endif
     unsigned lvaMonAcquired; // boolean variable introduced into in synchronized methods
                              // that tracks whether the lock has been taken
 
@@ -4801,6 +4798,7 @@ public:
     BasicBlock* fgSplitBlockAfterStatement(BasicBlock* curr, Statement* stmt);
     BasicBlock* fgSplitBlockAfterNode(BasicBlock* curr, GenTree* node); // for LIR
     BasicBlock* fgSplitEdge(BasicBlock* curr, BasicBlock* succ);
+    BasicBlock* fgSplitBlockBeforeTree(BasicBlock* block, Statement* stmt, GenTree* splitPoint, Statement** firstNewStmt, GenTree*** splitNodeUse);
 
     Statement* fgNewStmtFromTree(GenTree* tree, BasicBlock* block, const DebugInfo& di);
     Statement* fgNewStmtFromTree(GenTree* tree);
@@ -4934,6 +4932,17 @@ public:
             m_nodeToLoopMemoryBlockMap = new (getAllocator()) NodeToLoopMemoryBlockMap(getAllocator());
         }
         return m_nodeToLoopMemoryBlockMap;
+    }
+
+    typedef JitHashTable<void*, JitPtrKeyFuncs<void>, CORINFO_RUNTIME_LOOKUP> SignatureToLookupInfoMap;
+    SignatureToLookupInfoMap* m_signatureToLookupInfoMap;
+    SignatureToLookupInfoMap* GetSignatureToLookupInfoMap()
+    {
+        if (m_signatureToLookupInfoMap == nullptr)
+        {
+            m_signatureToLookupInfoMap = new (getAllocator()) SignatureToLookupInfoMap(getAllocator());
+        }
+        return m_signatureToLookupInfoMap;
     }
 
     void optRecordLoopMemoryDependence(GenTree* tree, BasicBlock* block, ValueNum memoryVN);
@@ -5268,6 +5277,7 @@ public:
     PhaseStatus StressSplitTree();
     void SplitTreesRandomly();
     void SplitTreesRemoveCommas();
+    PhaseStatus fgExpandRuntimeLookups();
     PhaseStatus fgInsertGCPolls();
     BasicBlock* fgCreateGCPoll(GCPollType pollType, BasicBlock* block);
 
@@ -6764,12 +6774,6 @@ protected:
         treeStmtLst* csdTreeList; // list of matching tree nodes: head
         treeStmtLst* csdTreeLast; // list of matching tree nodes: tail
 
-        // ToDo: This can be removed when gtGetStructHandleIfPresent stops guessing
-        // and GT_IND nodes always have valid struct handle.
-        //
-        CORINFO_CLASS_HANDLE csdStructHnd; // The class handle, currently needed to create a SIMD LclVar in PerformCSE
-        bool                 csdStructHndMismatch;
-
         ValueNum defExcSetPromise; // The exception set that is now required for all defs of this CSE.
                                    // This will be set to NoVN if we decide to abandon this CSE
 
@@ -7069,13 +7073,6 @@ public:
     {
         optMethodFlags |= OMF_HAS_EXPRUNTIMELOOKUP;
     }
-
-    void clearMethodHasExpRuntimeLookup()
-    {
-        optMethodFlags &= ~OMF_HAS_EXPRUNTIMELOOKUP;
-    }
-
-    void addExpRuntimeLookupCandidate(GenTreeCall* call);
 
     bool doesMethodHavePatchpoints()
     {
