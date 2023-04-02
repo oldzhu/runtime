@@ -2507,7 +2507,6 @@ public:
 public:
     GenTreeObj* gtNewObjNode(ClassLayout* layout, GenTree* addr);
     GenTreeObj* gtNewObjNode(CORINFO_CLASS_HANDLE structHnd, GenTree* addr);
-    void gtSetObjGcInfo(GenTreeObj* objNode);
     GenTree* gtNewStructVal(ClassLayout* layout, GenTree* addr);
     GenTree* gtNewBlockVal(GenTree* addr, unsigned size);
 
@@ -11691,6 +11690,9 @@ extern size_t   gcPtrMapNSize;
 #if COUNT_BASIC_BLOCKS
 extern Histogram bbCntTable;
 extern Histogram bbOneBBSizeTable;
+extern Histogram domsChangedIterationTable;
+extern Histogram computeReachabilitySetsIterationTable;
+extern Histogram computeReachabilityIterationTable;
 #endif
 
 /*****************************************************************************
