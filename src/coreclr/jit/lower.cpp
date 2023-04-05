@@ -580,7 +580,7 @@ GenTree* Lowering::LowerNode(GenTree* node)
             break;
 
         case GT_LCLHEAP:
-            ContainCheckLclHeap(node->AsOp());
+            LowerLclHeap(node);
             break;
 
 #ifdef TARGET_XARCH
@@ -2192,6 +2192,13 @@ GenTree* Lowering::LowerCall(GenTree* node)
         // There is one side effect which is flipping the order of PME and control expression
         // since LowerFastTailCall calls InsertPInvokeMethodEpilog.
         LowerFastTailCall(call);
+    }
+    else
+    {
+        if (!call->IsHelperCall(comp, CORINFO_HELP_VALIDATE_INDIRECT_CALL))
+        {
+            RequireOutgoingArgSpace(call, call->gtArgs.OutgoingArgsStackSize());
+        }
     }
 
     if (varTypeIsStruct(call))
@@ -7160,6 +7167,8 @@ PhaseStatus Lowering::DoPhase()
     }
 #endif
 
+    FinalizeOutgoingArgSpace();
+
     // Recompute local var ref counts before potentially sorting for liveness.
     // Note this does minimal work in cases where we are not going to sort.
     const bool isRecompute    = true;
@@ -7984,6 +7993,70 @@ void Lowering::TransformUnusedIndirection(GenTreeIndir* ind, Compiler* comp, Bas
 }
 
 //------------------------------------------------------------------------
+// LowerLclHeap: a common logic to lower LCLHEAP.
+//
+// Arguments:
+//    blkNode - the LCLHEAP node we are lowering.
+//
+void Lowering::LowerLclHeap(GenTree* node)
+{
+    assert(node->OperIs(GT_LCLHEAP));
+
+#if defined(TARGET_XARCH)
+    if (node->gtGetOp1()->IsCnsIntOrI())
+    {
+        GenTreeIntCon* sizeNode = node->gtGetOp1()->AsIntCon();
+        ssize_t        size     = sizeNode->IconValue();
+
+        if (size == 0)
+        {
+            // Replace with null for LCLHEAP(0)
+            node->BashToZeroConst(TYP_I_IMPL);
+            BlockRange().Remove(sizeNode);
+            return;
+        }
+
+        if (comp->info.compInitMem)
+        {
+            ssize_t alignedSize = ALIGN_UP(size, STACK_ALIGN);
+            if ((size > UINT_MAX) || (alignedSize > UINT_MAX))
+            {
+                // Size is too big - don't mark sizeNode as contained
+                return;
+            }
+
+            LIR::Use use;
+            if (BlockRange().TryGetUse(node, &use))
+            {
+                // Align LCLHEAP size for more efficient zeroing via BLK
+                sizeNode->SetIconValue(alignedSize);
+
+                // Emit STORE_BLK to zero it
+                //
+                //  *  STORE_BLK struct<alignedSize> (init) (Unroll)
+                //  +--*  LCL_VAR   long   V01
+                //  \--*  CNS_INT   int    0
+                //
+                GenTree*    heapLcl  = comp->gtNewLclvNode(use.ReplaceWithLclVar(comp), TYP_I_IMPL);
+                GenTree*    zero     = comp->gtNewIconNode(0);
+                GenTreeBlk* storeBlk = new (comp, GT_STORE_BLK)
+                    GenTreeBlk(GT_STORE_BLK, TYP_STRUCT, heapLcl, zero, comp->typGetBlkLayout((unsigned)alignedSize));
+                storeBlk->gtFlags |= (GTF_IND_UNALIGNED | GTF_ASG | GTF_EXCEPT | GTF_GLOB_REF);
+                BlockRange().InsertAfter(use.Def(), heapLcl, zero, storeBlk);
+                LowerNode(storeBlk);
+            }
+            else
+            {
+                // Value is unused and we don't mark the size node as contained
+                return;
+            }
+        }
+    }
+#endif
+    ContainCheckLclHeap(node->AsOp());
+}
+
+//------------------------------------------------------------------------
 // LowerBlockStoreCommon: a common logic to lower STORE_OBJ/BLK/DYN_BLK.
 //
 // Arguments:
@@ -8269,3 +8342,79 @@ GenTree* Lowering::InsertNewSimdCreateScalarUnsafeNode(var_types   simdType,
     return result;
 }
 #endif // FEATURE_HW_INTRINSICS
+
+//----------------------------------------------------------------------------------------------
+// Lowering::RequireOutgoingArgSpace: Record that the compilation will require
+// outgoing arg space of at least the specified size.
+//
+//  Arguments:
+//    node - The node that is the reason for the requirement.
+//    size - The minimal required size of the outgoing arg space.
+//
+void Lowering::RequireOutgoingArgSpace(GenTree* node, unsigned size)
+{
+#if FEATURE_FIXED_OUT_ARGS
+    if (size <= m_outgoingArgSpaceSize)
+    {
+        return;
+    }
+
+    JITDUMP("Bumping outgoing arg space size from %u to %u for [%06u]\n", m_outgoingArgSpaceSize, size,
+            Compiler::dspTreeID(node));
+    m_outgoingArgSpaceSize = size;
+#endif
+}
+
+//----------------------------------------------------------------------------------------------
+// Lowering::FinalizeOutgoingArgSpace: Finalize and allocate the outgoing arg
+// space area.
+//
+void Lowering::FinalizeOutgoingArgSpace()
+{
+#if FEATURE_FIXED_OUT_ARGS
+    // Finish computing the outgoing args area size
+    //
+    // Need to make sure the MIN_ARG_AREA_FOR_CALL space is added to the frame if:
+    // 1. there are calls to THROW_HELPER methods.
+    // 2. we are generating profiling Enter/Leave/TailCall hooks. This will ensure
+    //    that even methods without any calls will have outgoing arg area space allocated.
+    // 3. We will be generating calls to PInvoke helpers. TODO: This shouldn't be required because
+    //    if there are any calls to PInvoke methods, there should be a call that we processed
+    //    above. However, we still generate calls to PInvoke prolog helpers even if we have dead code
+    //    eliminated all the calls.
+    // 4. We will be generating a stack cookie check. In this case we can call a helper to fail fast.
+    //
+    // An example for these two cases is Windows Amd64, where the ABI requires to have 4 slots for
+    // the outgoing arg space if the method makes any calls.
+    if (m_outgoingArgSpaceSize < MIN_ARG_AREA_FOR_CALL)
+    {
+        if (comp->compUsesThrowHelper || comp->compIsProfilerHookNeeded() ||
+            (comp->compMethodRequiresPInvokeFrame() && !comp->opts.ShouldUsePInvokeHelpers()) ||
+            comp->getNeedsGSSecurityCookie())
+        {
+            m_outgoingArgSpaceSize = MIN_ARG_AREA_FOR_CALL;
+            JITDUMP("Bumping outgoing arg space size to %u for possible helper or profile hook call",
+                    m_outgoingArgSpaceSize);
+        }
+    }
+
+    // If a function has localloc, we will need to move the outgoing arg space when the
+    // localloc happens. When we do this, we need to maintain stack alignment. To avoid
+    // leaving alignment-related holes when doing this move, make sure the outgoing
+    // argument space size is a multiple of the stack alignment by aligning up to the next
+    // stack alignment boundary.
+    if (comp->compLocallocUsed)
+    {
+        m_outgoingArgSpaceSize = roundUp(m_outgoingArgSpaceSize, STACK_ALIGN);
+        JITDUMP("Bumping outgoing arg space size to %u for localloc", m_outgoingArgSpaceSize);
+    }
+
+    assert((m_outgoingArgSpaceSize % TARGET_POINTER_SIZE) == 0);
+
+    // Publish the final value and mark it as read only so any update
+    // attempt later will cause an assert.
+    comp->lvaOutgoingArgSpaceSize = m_outgoingArgSpaceSize;
+    comp->lvaOutgoingArgSpaceSize.MarkAsReadOnly();
+    comp->lvaGetDesc(comp->lvaOutgoingArgSpaceVar)->GrowBlockLayout(comp->typGetBlkLayout(m_outgoingArgSpaceSize));
+#endif
+}
