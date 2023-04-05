@@ -1,12 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-  </PropertyGroup>
-  <PropertyGroup>
-    <DebugType>Embedded</DebugType>
-    <Optimize />
+    <OutputType>Exe</OutputType>
+    <CLRTestPriority>0</CLRTestPriority>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="Serialize.X64.cs" />
+    <Compile Include="SelfRecursiveGenerics.cs" />
   </ItemGroup>
 </Project>
