@@ -66,11 +66,11 @@ void Compiler::impPushOnStack(GenTree* tree, typeInfo ti)
     verCurrentState.esStack[verCurrentState.esStackDepth].seTypeInfo = ti;
     verCurrentState.esStack[verCurrentState.esStackDepth++].val      = tree;
 
-    if ((tree->gtType == TYP_LONG) && (compLongUsed == false))
+    if (tree->gtType == TYP_LONG)
     {
         compLongUsed = true;
     }
-    else if (((tree->gtType == TYP_FLOAT) || (tree->gtType == TYP_DOUBLE)) && (compFloatingPointUsed == false))
+    else if ((tree->gtType == TYP_FLOAT) || (tree->gtType == TYP_DOUBLE))
     {
         compFloatingPointUsed = true;
     }
@@ -1115,14 +1115,7 @@ GenTree* Compiler::impGetStructAddr(GenTree* structVal, unsigned curLevel, bool 
         case GT_IND:
             if (willDeref)
             {
-                GenTree* addr = structVal->AsIndir()->Addr();
-                if (addr->OperIs(GT_FIELD_ADDR))
-                {
-                    // TODO-FIELD: delete this zero-diff quirk.
-                    addr->gtFlags &= ~GTF_FLD_DEREFERENCED;
-                }
-
-                return addr;
+                return structVal->AsIndir()->Addr();
             }
             break;
 
@@ -7483,7 +7476,7 @@ void Compiler::impImportBlockCode(BasicBlock* block)
             case CEE_BR_S:
                 jmpDist = (sz == 1) ? getI1LittleEndian(codeAddr) : getI4LittleEndian(codeAddr);
 
-                if (compIsForInlining() && jmpDist == 0)
+                if ((jmpDist == 0) && opts.IsInstrumentedOrOptimized())
                 {
                     break; /* NOP */
                 }
@@ -9157,8 +9150,7 @@ void Compiler::impImportBlockCode(BasicBlock* block)
                             obj = impGetStructAddr(obj, CHECK_SPILL_ALL, true);
                         }
 
-                        op1 = gtNewFieldAddrNode(varTypeIsGC(obj) ? TYP_BYREF : TYP_I_IMPL, resolvedToken.hField, obj,
-                                                 fieldInfo.offset);
+                        op1 = gtNewFieldAddrNode(resolvedToken.hField, obj, fieldInfo.offset);
 
 #ifdef FEATURE_READYTORUN
                         if (fieldInfo.fieldAccessor == CORINFO_FIELD_INSTANCE_WITH_BASE)
@@ -9464,8 +9456,7 @@ void Compiler::impImportBlockCode(BasicBlock* block)
                     case CORINFO_FIELD_INSTANCE_WITH_BASE:
 #endif
                     {
-                        op1 = gtNewFieldAddrNode(varTypeIsGC(obj) ? TYP_BYREF : TYP_I_IMPL, resolvedToken.hField, obj,
-                                                 fieldInfo.offset);
+                        op1 = gtNewFieldAddrNode(resolvedToken.hField, obj, fieldInfo.offset);
 
 #ifdef FEATURE_READYTORUN
                         if (fieldInfo.fieldAccessor == CORINFO_FIELD_INSTANCE_WITH_BASE)
