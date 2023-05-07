@@ -2963,6 +2963,11 @@ AGAIN:
 
     if (tree->OperIsUnary())
     {
+        if (tree->OperIsLocalStore() && (tree->AsLclVarCommon()->GetLclNum() == lclNum))
+        {
+            return true;
+        }
+
         return gtHasRef(tree->AsUnOp()->gtGetOp1(), lclNum);
     }
 
@@ -7684,6 +7689,71 @@ GenTree* Compiler::gtNewOneConNode(var_types type, var_types simdBaseType /* = T
     }
 }
 
+//------------------------------------------------------------------------
+// CreateInitValue:
+//   Create an IR node representing a constant value with the specified 8
+//   byte character broadcast into all of its bytes.
+//
+// Parameters:
+//   type    - The primitive type. For small types the constant will be
+//             zero/sign-extended and a TYP_INT node will be returned.
+//   pattern - A byte pattern.
+//
+// Returns:
+//   An IR node representing the constant.
+//
+// Remarks:
+//   Should only be called when that pattern can actually be represented; for
+//   example, GC pointers only support an init pattern of zero.
+//
+GenTree* Compiler::gtNewConWithPattern(var_types type, uint8_t pattern)
+{
+    switch (type)
+    {
+        case TYP_BOOL:
+        case TYP_UBYTE:
+            return gtNewIconNode(pattern);
+        case TYP_BYTE:
+            return gtNewIconNode((int8_t)pattern);
+        case TYP_SHORT:
+            return gtNewIconNode((int16_t)(pattern * 0x0101));
+        case TYP_USHORT:
+            return gtNewIconNode((uint16_t)(pattern * 0x0101));
+        case TYP_INT:
+            return gtNewIconNode(pattern * 0x01010101);
+        case TYP_LONG:
+            return gtNewLconNode(pattern * 0x0101010101010101LL);
+        case TYP_FLOAT:
+            float floatPattern;
+            memset(&floatPattern, pattern, sizeof(floatPattern));
+            return gtNewDconNode(floatPattern, TYP_FLOAT);
+        case TYP_DOUBLE:
+            double doublePattern;
+            memset(&doublePattern, pattern, sizeof(doublePattern));
+            return gtNewDconNode(doublePattern);
+        case TYP_REF:
+        case TYP_BYREF:
+            assert(pattern == 0);
+            return gtNewZeroConNode(type);
+#ifdef FEATURE_SIMD
+        case TYP_SIMD8:
+        case TYP_SIMD12:
+        case TYP_SIMD16:
+#if defined(TARGET_XARCH)
+        case TYP_SIMD32:
+        case TYP_SIMD64:
+#endif // TARGET_XARCH
+#endif // FEATURE_SIMD
+        {
+            GenTreeVecCon* node = gtNewVconNode(type);
+            memset(&node->gtSimdVal, pattern, sizeof(node->gtSimdVal));
+            return node;
+        }
+        default:
+            unreached();
+    }
+}
+
 GenTreeLclVar* Compiler::gtNewStoreLclVarNode(unsigned lclNum, GenTree* data)
 {
     LclVarDsc*     varDsc = lvaGetDesc(lclNum);
@@ -8899,8 +8969,7 @@ GenTree* Compiler::gtCloneExpr(
                 }
                 else
                 {
-                    // Remember that the LclVar node has been cloned. The flag will
-                    // be set on 'copy' as well.
+                    // Remember that the local node has been cloned. The flag will be set on 'copy' as well.
                     tree->gtFlags |= GTF_VAR_CLONED;
                     copy = gtNewLclvNode(tree->AsLclVar()->GetLclNum(),
                                          tree->gtType DEBUGARG(tree->AsLclVar()->gtLclILoffs));
@@ -8915,8 +8984,7 @@ GenTree* Compiler::gtCloneExpr(
                 }
                 else
                 {
-                    // Remember that the LclVar node has been cloned. The flag will
-                    // be set on 'copy' as well.
+                    // Remember that the local node has been cloned. The flag will be set on 'copy' as well.
                     tree->gtFlags |= GTF_VAR_CLONED;
                     copy = new (this, GT_LCL_FLD)
                         GenTreeLclFld(GT_LCL_FLD, tree->TypeGet(), tree->AsLclFld()->GetLclNum(),
@@ -8980,11 +9048,15 @@ GenTree* Compiler::gtCloneExpr(
         switch (oper)
         {
             case GT_STORE_LCL_VAR:
+                // Remember that the local node has been cloned. The flag will be set on 'copy' as well.
+                tree->gtFlags |= GTF_VAR_CLONED;
                 copy = new (this, GT_STORE_LCL_VAR)
                     GenTreeLclVar(tree->TypeGet(), tree->AsLclVar()->GetLclNum(), tree->AsLclVar()->Data());
                 break;
 
             case GT_STORE_LCL_FLD:
+                // Remember that the local node has been cloned. The flag will be set on 'copy' as well.
+                tree->gtFlags |= GTF_VAR_CLONED;
                 copy = new (this, GT_STORE_LCL_FLD)
                     GenTreeLclFld(tree->TypeGet(), tree->AsLclFld()->GetLclNum(), tree->AsLclFld()->GetLclOffs(),
                                   tree->AsLclFld()->Data(), tree->AsLclFld()->GetLayout());
@@ -10874,12 +10946,6 @@ void Compiler::gtDispNode(GenTree* tree, IndentStack* indentStack, _In_ _In_opt_
                     if (tree->gtFlags & GTF_IND_NONFAULTING)
                     {
                         printf("n"); // print a n for non-faulting
-                        --msgLength;
-                        break;
-                    }
-                    if (tree->gtFlags & GTF_IND_ASG_LHS)
-                    {
-                        printf("D"); // print a D for definition
                         --msgLength;
                         break;
                     }
@@ -16308,17 +16374,6 @@ bool Compiler::gtNodeHasSideEffects(GenTree* tree, GenTreeFlags flags)
         {
             return true;
         }
-
-        // TODO-FIELD: delete this zero-diff quirk.
-        if (tree->OperIsIndir() && tree->AsIndir()->Addr()->OperIs(GT_FIELD_ADDR))
-        {
-            GenTreeFieldAddr* addr = tree->AsIndir()->Addr()->AsFieldAddr();
-            if (addr->IsInstance() && ((addr->gtFlags & GTF_FLD_DEREFERENCED) != 0) &&
-                fgAddrCouldBeNull(addr->GetFldObj()))
-            {
-                return true;
-            }
-        }
     }
 
     // Expressions declared as CSE by (e.g.) hoisting code are considered to have relevant side
@@ -17350,15 +17405,7 @@ bool GenTree::IsPhiNode()
 
 bool GenTree::IsPhiDefn()
 {
-    if (OperIs(GT_ASG))
-    {
-        return AsOp()->gtOp2->OperIs(GT_PHI);
-    }
-    if (OperIs(GT_STORE_LCL_VAR))
-    {
-        return AsLclVar()->Data()->OperIs(GT_PHI);
-    }
-    return false;
+    return OperIs(GT_STORE_LCL_VAR) && AsLclVar()->Data()->OperIs(GT_PHI);
 }
 
 bool GenTree::IsLclVarAddr() const
@@ -17408,6 +17455,42 @@ bool GenTree::DefinesLocal(
 {
     assert((pOffset == nullptr) || (*pOffset == 0));
 
+    if (OperIs(GT_STORE_LCL_VAR))
+    {
+        *pLclVarTree = AsLclVarCommon();
+        if (pIsEntire != nullptr)
+        {
+            *pIsEntire = true;
+        }
+        if (pOffset != nullptr)
+        {
+            *pOffset = 0;
+        }
+        if (pSize != nullptr)
+        {
+            *pSize = comp->lvaLclExactSize(AsLclVarCommon()->GetLclNum());
+        }
+
+        return true;
+    }
+    if (OperIs(GT_STORE_LCL_FLD))
+    {
+        *pLclVarTree = AsLclVarCommon();
+        if (pIsEntire != nullptr)
+        {
+            *pIsEntire = !AsLclFld()->IsPartialLclFld(comp);
+        }
+        if (pOffset != nullptr)
+        {
+            *pOffset = AsLclFld()->GetLclOffs();
+        }
+        if (pSize != nullptr)
+        {
+            *pSize = AsLclFld()->GetSize();
+        }
+
+        return true;
+    }
     if (OperIs(GT_ASG))
     {
         GenTree* lhs = AsOp()->gtGetOp1();
@@ -17583,29 +17666,25 @@ GenTreeLclVar* GenTree::IsImplicitByrefParameterValuePostMorph(Compiler* compile
 
 unsigned GenTree::IsLclVarUpdateTree(GenTree** pOtherTree, genTreeOps* pOper)
 {
-    unsigned lclNum = BAD_VAR_NUM;
-    if (OperIs(GT_ASG))
+    if (OperIs(GT_STORE_LCL_VAR) && AsLclVar()->Data()->OperIsBinary())
     {
-        GenTree* lhs = AsOp()->gtOp1;
-        GenTree* rhs = AsOp()->gtOp2;
-        if ((lhs->OperGet() == GT_LCL_VAR) && rhs->OperIsBinary())
-        {
-            unsigned lhsLclNum = lhs->AsLclVarCommon()->GetLclNum();
-            GenTree* rhsOp1    = rhs->AsOp()->gtOp1;
-            GenTree* rhsOp2    = rhs->AsOp()->gtOp2;
+        unsigned lclNum = AsLclVar()->GetLclNum();
+        GenTree* value  = AsLclVar()->Data();
+        GenTree* op1    = value->AsOp()->gtOp1;
+        GenTree* op2    = value->AsOp()->gtOp2;
 
-            // Some operators, such as HWINTRINSIC, are currently declared as binary but
-            // may not have two operands. We must check that both operands actually exist.
-            if ((rhsOp1 != nullptr) && (rhsOp2 != nullptr) && (rhsOp1->OperGet() == GT_LCL_VAR) &&
-                (rhsOp1->AsLclVarCommon()->GetLclNum() == lhsLclNum))
-            {
-                lclNum      = lhsLclNum;
-                *pOtherTree = rhsOp2;
-                *pOper      = rhs->OperGet();
-            }
+        // Some operators, such as LEA, are currently declared as binary but may
+        // not have two operands. We must check that both operands actually exist.
+        if ((op1 != nullptr) && (op2 != nullptr) && (op1->OperGet() == GT_LCL_VAR) &&
+            (op1->AsLclVarCommon()->GetLclNum() == lclNum))
+        {
+            *pOtherTree = op2;
+            *pOper      = value->OperGet();
+            return lclNum;
         }
     }
-    return lclNum;
+
+    return BAD_VAR_NUM;
 }
 
 //------------------------------------------------------------------------
@@ -17617,21 +17696,7 @@ unsigned GenTree::IsLclVarUpdateTree(GenTree** pOtherTree, genTreeOps* pOper)
 //
 bool GenTree::IsBlockProfileUpdate()
 {
-    if (!OperIs(GT_ASG))
-    {
-        return false;
-    }
-
-    GenTree* const lhs = AsOp()->gtOp1;
-
-    if (!lhs->OperIs(GT_IND))
-    {
-        return false;
-    }
-
-    GenTree* const addr = lhs->AsIndir()->Addr();
-
-    return addr->IsIconHandle(GTF_ICON_BBC_PTR);
+    return OperIs(GT_STOREIND) && AsIndir()->Addr()->IsIconHandle(GTF_ICON_BBC_PTR);
 }
 
 #ifdef DEBUG
