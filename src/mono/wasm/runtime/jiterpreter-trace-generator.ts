@@ -48,7 +48,9 @@ import {
     relopbranchTable, mathIntrinsicTable,
     simdCreateLoadOps, simdCreateSizes,
     simdCreateStoreOps, simdShiftTable,
+    bitmaskTable, createScalarTable,
 } from "./jiterpreter-tables";
+import { mono_log_error, mono_log_info } from "./logging";
 
 /*
 struct MonoVTable {
@@ -186,7 +188,7 @@ export function generateWasmBody(
         if (ip >= endOfBody) {
             record_abort(traceIp, ip, traceName, "end-of-body");
             if (instrumentedTraceId)
-                console.log(`instrumented trace ${traceName} exited at end of body @${(<any>ip).toString(16)}`);
+                mono_log_info(`instrumented trace ${traceName} exited at end of body @${(<any>ip).toString(16)}`);
             break;
         }
 
@@ -196,10 +198,10 @@ export function generateWasmBody(
         const maxBytesGenerated = 3840,
             spaceLeft = maxBytesGenerated - builder.bytesGeneratedSoFar - builder.cfg.overheadBytes;
         if (builder.size >= spaceLeft) {
-            // console.log(`trace too big, estimated size is ${builder.size + builder.bytesGeneratedSoFar}`);
+            // mono_log_info(`trace too big, estimated size is ${builder.size + builder.bytesGeneratedSoFar}`);
             record_abort(traceIp, ip, traceName, "trace-too-big");
             if (instrumentedTraceId)
-                console.log(`instrumented trace ${traceName} exited because of size limit at @${(<any>ip).toString(16)} (spaceLeft=${spaceLeft}b)`);
+                mono_log_info(`instrumented trace ${traceName} exited because of size limit at @${(<any>ip).toString(16)} (spaceLeft=${spaceLeft}b)`);
             break;
         }
 
@@ -250,7 +252,7 @@ export function generateWasmBody(
         //  opcodes know that it's available by branching to the top of the dispatch loop
         if (isBackBranchTarget) {
             if (traceBackBranches > 1)
-                console.log(`${traceName} recording back branch target 0x${(<any>ip).toString(16)}`);
+                mono_log_info(`${traceName} recording back branch target 0x${(<any>ip).toString(16)}`);
             builder.backBranchOffsets.push(ip);
         }
 
@@ -451,7 +453,7 @@ export function generateWasmBody(
                 // We will have bailed out if the object was null
                 if (builder.allowNullCheckOptimization) {
                     if (traceNullCheckOptimizations)
-                        console.log(`(0x${(<any>ip).toString(16)}) locals[${dest}] passed cknull`);
+                        mono_log_info(`(0x${(<any>ip).toString(16)}) locals[${dest}] passed cknull`);
                     notNullSince.set(dest, <any>ip);
                 }
                 skipDregInvalidation = true;
@@ -521,7 +523,7 @@ export function generateWasmBody(
                 const offset = getArgU16(ip, 2),
                     flag = isAddressTaken(builder, offset);
                 if (!flag)
-                    console.error(`MONO_WASM: ${traceName}: Expected local ${offset} to have address taken flag`);
+                    mono_log_error(`${traceName}: Expected local ${offset} to have address taken flag`);
                 append_ldloca(builder, offset);
                 append_stloc_tail(builder, getArgU16(ip, 1), WasmOpcode.i32_store);
                 break;
@@ -1004,7 +1006,7 @@ export function generateWasmBody(
                     (builder.callHandlerReturnAddresses.length > 0) &&
                     (builder.callHandlerReturnAddresses.length <= maxCallHandlerReturnAddresses)
                 ) {
-                    // console.log(`endfinally @0x${(<any>ip).toString(16)}. return addresses:`, builder.callHandlerReturnAddresses.map(ra => (<any>ra).toString(16)));
+                    // mono_log_info(`endfinally @0x${(<any>ip).toString(16)}. return addresses:`, builder.callHandlerReturnAddresses.map(ra => (<any>ra).toString(16)));
                     // FIXME: Clean this codegen up
                     // Load ret_ip
                     const clauseIndex = getArgU16(ip, 1),
@@ -1360,7 +1362,7 @@ export function generateWasmBody(
                 } else {
                     /*
                     if (opcodeValue > 0)
-                        console.log(`JITERP: aborting trace for opcode ${opname} with value ${opcodeValue}`);
+                        mono_log_info(`JITERP: aborting trace for opcode ${opname} with value ${opcodeValue}`);
                     */
                     ip = abort;
                 }
@@ -1409,7 +1411,7 @@ export function generateWasmBody(
                     prologueOpcodeCounter++;
                 result += opcodeValue;
             } else if (opcodeValue < 0) {
-                // console.log(`JITERP: opcode ${opname} did not abort but had value ${opcodeValue}`);
+                // mono_log_info(`JITERP: opcode ${opname} did not abort but had value ${opcodeValue}`);
             }
 
             ip += <any>(opLengthU16 * 2);
@@ -1420,7 +1422,7 @@ export function generateWasmBody(
                 builder.appendU8(WasmOpcode.nop);
         } else {
             if (instrumentedTraceId)
-                console.log(`instrumented trace ${traceName} aborted for opcode ${opname} @${(<any>_ip).toString(16)}`);
+                mono_log_info(`instrumented trace ${traceName} aborted for opcode ${opname} @${(<any>_ip).toString(16)}`);
             record_abort(traceIp, _ip, traceName, opcode);
         }
     }
@@ -1435,7 +1437,7 @@ export function generateWasmBody(
 
     builder.cfg.exitIp = rip;
 
-    // console.log(`estimated size: ${builder.size + builder.cfg.overheadBytes + builder.bytesGeneratedSoFar}`);
+    // mono_log_info(`estimated size: ${builder.size + builder.cfg.overheadBytes + builder.bytesGeneratedSoFar}`);
 
     // HACK: Traces containing simd will be *much* shorter than non-simd traces,
     //  which will cause both the heuristic and our length requirement outside
@@ -1552,15 +1554,15 @@ function append_ldloc_cknull(builder: WasmBuilder, localOffset: number, ip: Mint
         counters.nullChecksEliminated++;
         if (nullCheckCaching && (cknullOffset === localOffset)) {
             if (traceNullCheckOptimizations)
-                console.log(`(0x${(<any>ip).toString(16)}) cknull_ptr == locals[${localOffset}], not null since 0x${notNullSince.get(localOffset)!.toString(16)}`);
+                mono_log_info(`(0x${(<any>ip).toString(16)}) cknull_ptr == locals[${localOffset}], not null since 0x${notNullSince.get(localOffset)!.toString(16)}`);
             if (leaveOnStack)
                 builder.local("cknull_ptr");
         } else {
-            // console.log(`skipping null check for ${localOffset}`);
+            // mono_log_info(`skipping null check for ${localOffset}`);
             append_ldloc(builder, localOffset, WasmOpcode.i32_load);
             builder.local("cknull_ptr", leaveOnStack ? WasmOpcode.tee_local : WasmOpcode.set_local);
             if (traceNullCheckOptimizations)
-                console.log(`(0x${(<any>ip).toString(16)}) cknull_ptr := locals[${localOffset}] (fresh load, already null checked at 0x${notNullSince.get(localOffset)!.toString(16)})`);
+                mono_log_info(`(0x${(<any>ip).toString(16)}) cknull_ptr := locals[${localOffset}] (fresh load, already null checked at 0x${notNullSince.get(localOffset)!.toString(16)})`);
             cknullOffset = localOffset;
         }
 
@@ -1590,7 +1592,7 @@ function append_ldloc_cknull(builder: WasmBuilder, localOffset: number, ip: Mint
     ) {
         notNullSince.set(localOffset, <any>ip);
         if (traceNullCheckOptimizations)
-            console.log(`(0x${(<any>ip).toString(16)}) cknull_ptr := locals[${localOffset}] (fresh load, fresh null check)`);
+            mono_log_info(`(0x${(<any>ip).toString(16)}) cknull_ptr := locals[${localOffset}] (fresh load, fresh null check)`);
         cknullOffset = localOffset;
     } else
         cknullOffset = -1;
@@ -1849,7 +1851,7 @@ function emit_fieldop(
                 builder.endBlock();
             } else {
                 if (traceNullCheckOptimizations)
-                    console.log(`(0x${(<any>ip).toString(16)}) locals[${objectOffset}] not null since 0x${notNullSince.get(objectOffset)!.toString(16)}`);
+                    mono_log_info(`(0x${(<any>ip).toString(16)}) locals[${objectOffset}] not null since 0x${notNullSince.get(objectOffset)!.toString(16)}`);
 
                 builder.appendU8(WasmOpcode.drop);
                 counters.nullChecksEliminated++;
@@ -2330,7 +2332,7 @@ function append_call_handler_store_ret_ip(
     builder.appendU8(WasmOpcode.i32_store);
     builder.appendMemarg(clauseDataOffset, 0); // FIXME: 32-bit alignment?
 
-    // console.log(`call_handler @0x${(<any>ip).toString(16)} retIp=0x${retIp.toString(16)}`);
+    // mono_log_info(`call_handler @0x${(<any>ip).toString(16)} retIp=0x${retIp.toString(16)}`);
     builder.callHandlerReturnAddresses.push(retIp);
 }
 
@@ -2363,7 +2365,7 @@ function emit_branch(
                 : getArgI16(ip, 1);
 
             if (traceBranchDisplacements)
-                console.log(`br.s @${ip} displacement=${displacement}`);
+                mono_log_info(`br.s @${ip} displacement=${displacement}`);
             const destination = <any>ip + (displacement * 2);
 
             if (displacement <= 0) {
@@ -2372,7 +2374,7 @@ function emit_branch(
                     //  to the top of the loop body
                     // append_safepoint(builder, ip);
                     if (traceBackBranches > 1)
-                        console.log(`performing backward branch to 0x${destination.toString(16)}`);
+                        mono_log_info(`performing backward branch to 0x${destination.toString(16)}`);
                     if (isCallHandler)
                         append_call_handler_store_ret_ip(builder, ip, frame, opcode);
                     builder.cfg.branch(destination, true, false);
@@ -2381,9 +2383,9 @@ function emit_branch(
                 } else {
                     if (destination < builder.cfg.entryIp) {
                         if ((traceBackBranches > 1) || (builder.cfg.trace > 1))
-                            console.log(`${getOpcodeName(opcode)} target 0x${destination.toString(16)} before start of trace`);
+                            mono_log_info(`${getOpcodeName(opcode)} target 0x${destination.toString(16)} before start of trace`);
                     } else if ((traceBackBranches > 0) || (builder.cfg.trace > 0))
-                        console.log(`0x${(<any>ip).toString(16)} ${getOpcodeName(opcode)} target 0x${destination.toString(16)} not found in list ` +
+                        mono_log_info(`0x${(<any>ip).toString(16)} ${getOpcodeName(opcode)} target 0x${destination.toString(16)} not found in list ` +
                             builder.backBranchOffsets.map(bbo => "0x" + (<any>bbo).toString(16)).join(", ")
                         );
 
@@ -2452,7 +2454,7 @@ function emit_branch(
     if (!displacement)
         throw new Error("Branch had no displacement");
     else if (traceBranchDisplacements)
-        console.log(`${getOpcodeName(opcode)} @${ip} displacement=${displacement}`);
+        mono_log_info(`${getOpcodeName(opcode)} @${ip} displacement=${displacement}`);
 
     const destination = <any>ip + (displacement * 2);
 
@@ -2469,15 +2471,15 @@ function emit_branch(
             // We found a backwards branch target we can reach via our outer trace loop, so
             //  we update eip and branch out to the top of the loop block
             if (traceBackBranches > 1)
-                console.log(`performing conditional backward branch to 0x${destination.toString(16)}`);
+                mono_log_info(`performing conditional backward branch to 0x${destination.toString(16)}`);
             builder.cfg.branch(destination, true, true);
             counters.backBranchesEmitted++;
         } else {
             if (destination < builder.cfg.entryIp) {
                 if ((traceBackBranches > 1) || (builder.cfg.trace > 1))
-                    console.log(`${getOpcodeName(opcode)} target 0x${destination.toString(16)} before start of trace`);
+                    mono_log_info(`${getOpcodeName(opcode)} target 0x${destination.toString(16)} before start of trace`);
             } else if ((traceBackBranches > 0) || (builder.cfg.trace > 0))
-                console.log(`0x${(<any>ip).toString(16)} ${getOpcodeName(opcode)} target 0x${destination.toString(16)} not found in list ` +
+                mono_log_info(`0x${(<any>ip).toString(16)} ${getOpcodeName(opcode)} target 0x${destination.toString(16)} not found in list ` +
                     builder.backBranchOffsets.map(bbo => "0x" + (<any>bbo).toString(16)).join(", ")
                 );
             // We didn't find a loop to branch to, so bail out
@@ -2522,7 +2524,7 @@ function emit_relop_branch(
     builder.block();
     const displacement = getArgI16(ip, 3);
     if (traceBranchDisplacements)
-        console.log(`relop @${ip} displacement=${displacement}`);
+        mono_log_info(`relop @${ip} displacement=${displacement}`);
 
     const operandLoadOp = relopInfo
         ? relopInfo[1]
@@ -3012,7 +3014,7 @@ function getIsWasmSimdSupported(): boolean {
         new WebAssembly.Module(bytes);
         wasmSimdSupported = true;
     } catch (exc) {
-        console.log("MONO_WASM: Disabling WASM SIMD support due to JIT failure", exc);
+        mono_log_info("Disabling WASM SIMD support due to JIT failure", exc);
         wasmSimdSupported = false;
     }
 
@@ -3126,7 +3128,7 @@ function emit_simd(
             return true;
         }
         default:
-            console.log(`MONO_WASM: jiterpreter emit_simd failed for ${opname}`);
+            mono_log_info(`jiterpreter emit_simd failed for ${opname}`);
             return false;
     }
 }
@@ -3155,13 +3157,6 @@ function append_simd_4_load(builder: WasmBuilder, ip: MintOpcodePtr) {
     append_ldloc(builder, getArgU16(ip, 4), WasmOpcode.PREFIX_simd, WasmSimdOpcode.v128_load);
 }
 
-function append_stloc_simd_zero(builder: WasmBuilder, offset: number) {
-    builder.local("pLocals");
-    builder.appendSimd(WasmSimdOpcode.v128_const);
-    builder.appendBytes(new Uint8Array(sizeOfV128));
-    append_stloc_tail(builder, offset, WasmOpcode.PREFIX_simd, WasmSimdOpcode.v128_store);
-}
-
 function emit_simd_2(builder: WasmBuilder, ip: MintOpcodePtr, index: SimdIntrinsic2): boolean {
     const simple = <WasmSimdOpcode>cwraps.mono_jiterp_get_simd_opcode(1, index);
     if (simple) {
@@ -3171,35 +3166,33 @@ function emit_simd_2(builder: WasmBuilder, ip: MintOpcodePtr, index: SimdIntrins
         return true;
     }
 
+    const bitmask = bitmaskTable[index];
+    if (bitmask) {
+        append_simd_2_load(builder, ip);
+        builder.appendSimd(bitmask);
+        append_stloc_tail(builder, getArgU16(ip, 1), WasmOpcode.i32_store);
+        return true;
+    }
+
     switch (index) {
         case SimdIntrinsic2.V128_I1_CREATE_SCALAR:
-            // Zero then write scalar component
-            builder.local("pLocals");
-            append_stloc_simd_zero(builder, getArgU16(ip, 1));
-            append_ldloc(builder, getArgU16(ip, 2), WasmOpcode.i32_load8_s);
-            append_stloc_tail(builder, getArgU16(ip, 1), WasmOpcode.i32_store8);
-            return true;
         case SimdIntrinsic2.V128_I2_CREATE_SCALAR:
-            // Zero then write scalar component
-            builder.local("pLocals");
-            append_stloc_simd_zero(builder, getArgU16(ip, 1));
-            append_ldloc(builder, getArgU16(ip, 2), WasmOpcode.i32_load16_s);
-            append_stloc_tail(builder, getArgU16(ip, 1), WasmOpcode.i32_store16);
-            return true;
         case SimdIntrinsic2.V128_I4_CREATE_SCALAR:
-            // Zero then write scalar component
+        case SimdIntrinsic2.V128_I8_CREATE_SCALAR: {
+            const tableEntry = createScalarTable[index];
             builder.local("pLocals");
-            append_stloc_simd_zero(builder, getArgU16(ip, 1));
-            append_ldloc(builder, getArgU16(ip, 2), WasmOpcode.i32_load);
-            append_stloc_tail(builder, getArgU16(ip, 1), WasmOpcode.i32_store);
+            // Make a zero vector
+            builder.i52_const(0);
+            builder.appendSimd(WasmSimdOpcode.i64x2_splat);
+            // Load the scalar value
+            append_ldloc(builder, getArgU16(ip, 2), tableEntry[0]);
+            // Replace the first lane
+            builder.appendSimd(tableEntry[1]);
+            builder.appendU8(0);
+            // Store result
+            append_stloc_tail(builder, getArgU16(ip, 1), WasmOpcode.PREFIX_simd, WasmSimdOpcode.v128_store);
             return true;
-        case SimdIntrinsic2.V128_I8_CREATE_SCALAR:
-            // Zero then write scalar component
-            builder.local("pLocals");
-            append_stloc_simd_zero(builder, getArgU16(ip, 1));
-            append_ldloc(builder, getArgU16(ip, 2), WasmOpcode.i64_load);
-            append_stloc_tail(builder, getArgU16(ip, 1), WasmOpcode.i64_store);
-            return true;
+        }
 
         case SimdIntrinsic2.V128_I1_CREATE:
             append_simd_2_load(builder, ip, WasmSimdOpcode.v128_load8_splat);
