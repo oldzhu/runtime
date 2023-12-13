@@ -1925,7 +1925,7 @@ bool Compiler::fgCanCompactBlocks(BasicBlock* block, BasicBlock* bNext)
     }
 
     // Don't compact away any loop entry blocks that we added in optCanonicalizeLoops
-    if (optIsLoopEntry(block))
+    if (block->HasFlag(BBF_OLD_LOOP_HEADER_QUIRK))
     {
         return false;
     }
@@ -2222,8 +2222,6 @@ void Compiler::fgCompactBlocks(BasicBlock* block, BasicBlock* bNext)
         }
     }
 
-    /* set the right links */
-
     VarSetOps::AssignAllowUninitRhs(this, block->bbLiveOut, bNext->bbLiveOut);
 
     // Update the beginning and ending IL offsets (bbCodeOffs and bbCodeOffsEnd).
@@ -2294,11 +2292,6 @@ void Compiler::fgCompactBlocks(BasicBlock* block, BasicBlock* bNext)
             FALLTHROUGH;
 
         case BBJ_ALWAYS:
-            // Propagate BBF_NONE_QUIRK flag
-            block->CopyFlags(bNext, BBF_NONE_QUIRK);
-
-            FALLTHROUGH;
-
         case BBJ_EHCATCHRET:
         case BBJ_EHFILTERRET:
             block->SetKindAndTarget(bNext->GetKind(), bNext->GetTarget());
@@ -2346,6 +2339,17 @@ void Compiler::fgCompactBlocks(BasicBlock* block, BasicBlock* bNext)
 
     assert(block->KindIs(bNext->GetKind()));
 
+    if (block->KindIs(BBJ_ALWAYS))
+    {
+        // Propagate BBF_NONE_QUIRK flag
+        block->CopyFlags(bNext, BBF_NONE_QUIRK);
+    }
+    else
+    {
+        // It's no longer a BBJ_ALWAYS; remove the BBF_NONE_QUIRK flag.
+        block->RemoveFlags(BBF_NONE_QUIRK);
+    }
+
     // If we're collapsing a block created after the dominators are
     // computed, copy block number the block and reuse dominator
     // information from bNext to block.
@@ -2355,20 +2359,28 @@ void Compiler::fgCompactBlocks(BasicBlock* block, BasicBlock* bNext)
     // before the updates, we can create pred lists with duplicate m_block->bbNum
     // values (though different m_blocks).
     //
-    if (fgDomsComputed && (block->bbNum > fgDomBBcount))
+    if ((fgDomsComputed || fgCompactRenumberQuirk) && (block->bbNum > fgDomBBcount))
     {
-        assert(fgReachabilitySetsValid);
-        BlockSetOps::Assign(this, block->bbReach, bNext->bbReach);
-        BlockSetOps::ClearD(this, bNext->bbReach);
+        if (fgDomsComputed)
+        {
+            assert(fgReachabilitySetsValid);
+            BlockSetOps::Assign(this, block->bbReach, bNext->bbReach);
+            BlockSetOps::ClearD(this, bNext->bbReach);
 
-        block->bbIDom = bNext->bbIDom;
-        bNext->bbIDom = nullptr;
+            block->bbIDom = bNext->bbIDom;
+            bNext->bbIDom = nullptr;
 
-        // In this case, there's no need to update the preorder and postorder numbering
-        // since we're changing the bbNum, this makes the basic block all set.
-        //
-        JITDUMP("Renumbering " FMT_BB " to be " FMT_BB " to preserve dominator information\n", block->bbNum,
-                bNext->bbNum);
+            // In this case, there's no need to update the preorder and postorder numbering
+            // since we're changing the bbNum, this makes the basic block all set.
+            //
+            JITDUMP("Renumbering " FMT_BB " to be " FMT_BB " to preserve dominator information\n", block->bbNum,
+                    bNext->bbNum);
+        }
+        else
+        {
+            // TODO-Quirk: Remove
+            JITDUMP("Renumbering " FMT_BB " to be " FMT_BB " for a quirk\n", block->bbNum, bNext->bbNum);
+        }
 
         block->bbNum = bNext->bbNum;
 
@@ -2387,7 +2399,10 @@ void Compiler::fgCompactBlocks(BasicBlock* block, BasicBlock* bNext)
         }
     }
 
-    fgUpdateLoopsAfterCompacting(block, bNext);
+    if (optLoopTableValid)
+    {
+        fgUpdateLoopsAfterCompacting(block, bNext);
+    }
 
 #if DEBUG
     if (verbose && 0)
@@ -6015,7 +6030,10 @@ bool Compiler::fgUpdateFlowGraph(bool doTailDuplication, bool isPhase)
                 if (bDest == bNext)
                 {
                     // Skip jump optimizations, and try to compact block and bNext later
-                    block->SetFlags(BBF_NONE_QUIRK);
+                    if (!block->isBBCallAlwaysPairTail())
+                    {
+                        block->SetFlags(BBF_NONE_QUIRK);
+                    }
                     bDest = nullptr;
                 }
             }
@@ -6227,8 +6245,11 @@ bool Compiler::fgUpdateFlowGraph(bool doTailDuplication, bool isPhase)
                         /* Mark the block as removed */
                         bNext->SetFlags(BBF_REMOVED);
 
-                        // Update the loop table if we removed the bottom of a loop, for example.
-                        fgUpdateLoopsAfterCompacting(block, bNext);
+                        if (optLoopTableValid)
+                        {
+                            // Update the loop table if we removed the bottom of a loop, for example.
+                            fgUpdateLoopsAfterCompacting(block, bNext);
+                        }
 
                         // If this is the first Cold basic block update fgFirstColdBlock
                         if (bNext->IsFirstColdBlock(this))
