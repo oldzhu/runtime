@@ -4202,7 +4202,7 @@ public:
 
 #ifdef DEBUG
     void lvaDumpRegLocation(unsigned lclNum);
-    void lvaDumpFrameLocation(unsigned lclNum);
+    void lvaDumpFrameLocation(unsigned lclNum, int minLength);
     void lvaDumpEntry(unsigned lclNum, FrameLayoutState curState, size_t refCntWtdWidth = 6);
     void lvaTableDump(FrameLayoutState curState = NO_FRAME_LAYOUT); // NO_FRAME_LAYOUT means use the current frame
                                                                     // layout state defined by lvaDoneFrameLayout
@@ -8247,10 +8247,8 @@ public:
     // Used for respective assertion propagations.
     AssertionIndex optAssertionIsSubrange(GenTree* tree, IntegralRange range, ASSERT_VALARG_TP assertions);
     AssertionIndex optAssertionIsSubtype(GenTree* tree, GenTree* methodTableArg, ASSERT_VALARG_TP assertions);
-    AssertionIndex optAssertionIsNonNullInternal(GenTree* op, ASSERT_VALARG_TP assertions DEBUGARG(bool* pVnBased));
     bool           optAssertionVNIsNonNull(ValueNum vn, ASSERT_VALARG_TP assertions);
-    bool           optAssertionIsNonNull(GenTree*                    op,
-                                         ASSERT_VALARG_TP assertions DEBUGARG(bool* pVnBased) DEBUGARG(AssertionIndex* pIndex));
+    bool           optAssertionIsNonNull(GenTree* op, ASSERT_VALARG_TP assertions);
 
     AssertionIndex optGlobalAssertionIsEqualOrNotEqual(ASSERT_VALARG_TP assertions, GenTree* op1, GenTree* op2);
     AssertionIndex optGlobalAssertionIsEqualOrNotEqualZero(ASSERT_VALARG_TP assertions, GenTree* op1);
