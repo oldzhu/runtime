@@ -8548,6 +8548,11 @@ GenTreeConditional* Compiler::gtNewConditionalNode(
     return node;
 }
 
+GenTreeFieldList* Compiler::gtNewFieldList()
+{
+    return new (this, GT_FIELD_LIST) GenTreeFieldList();
+}
+
 GenTreeLclFld* Compiler::gtNewLclFldNode(unsigned lnum, var_types type, unsigned offset, ClassLayout* layout)
 {
     GenTreeLclFld* node = new (this, GT_LCL_FLD) GenTreeLclFld(GT_LCL_FLD, type, lnum, offset, layout);
@@ -9148,20 +9153,12 @@ GenTree* Compiler::gtNewPutArgReg(var_types type, GenTree* arg, regNumber argReg
 // Notes:
 //    The node is generated as GenTreeMultiRegOp on RyuJIT/arm, as GenTreeOp on all the other archs.
 //
-GenTree* Compiler::gtNewBitCastNode(var_types type, GenTree* arg)
+GenTreeUnOp* Compiler::gtNewBitCastNode(var_types type, GenTree* arg)
 {
     assert(arg != nullptr);
     assert(type != TYP_STRUCT);
 
-    GenTree* node = nullptr;
-#if defined(TARGET_ARM)
-    // A BITCAST could be a MultiRegOp on arm since we could move a double register to two int registers.
-    node = new (this, GT_BITCAST) GenTreeMultiRegOp(GT_BITCAST, type, arg, nullptr);
-#else
-    node = gtNewOperNode(GT_BITCAST, type, arg);
-#endif
-
-    return node;
+    return gtNewOperNode(GT_BITCAST, type, arg);
 }
 
 //------------------------------------------------------------------------
@@ -21692,7 +21689,39 @@ GenTree* Compiler::gtNewSimdCvtNode(var_types   type,
     GenTree* fixupVal;
     bool     isV512Supported = false;
 
-    if (compIsEvexOpportunisticallySupported(isV512Supported))
+    if (compOpportunisticallyDependsOn(InstructionSet_AVX10v2))
+    {
+        NamedIntrinsic cvtIntrinsic = NI_Illegal;
+        switch (simdTargetBaseType)
+        {
+            case TYP_INT:
+                cvtIntrinsic = (simdSize == 64) ? NI_AVX10v2_V512_ConvertToVectorInt32WithTruncationSaturation
+                                                : NI_AVX10v2_ConvertToVectorInt32WithTruncationSaturation;
+                break;
+
+            case TYP_UINT:
+                cvtIntrinsic = (simdSize == 64) ? NI_AVX10v2_V512_ConvertToVectorUInt32WithTruncationSaturation
+                                                : NI_AVX10v2_ConvertToVectorUInt32WithTruncationSaturation;
+                break;
+
+            case TYP_LONG:
+                cvtIntrinsic = (simdSize == 64) ? NI_AVX10v2_V512_ConvertToVectorInt64WithTruncationSaturation
+                                                : NI_AVX10v2_ConvertToVectorInt64WithTruncationSaturation;
+                break;
+
+            case TYP_ULONG:
+                cvtIntrinsic = (simdSize == 64) ? NI_AVX10v2_V512_ConvertToVectorUInt64WithTruncationSaturation
+                                                : NI_AVX10v2_ConvertToVectorUInt64WithTruncationSaturation;
+                break;
+
+            default:
+            {
+                unreached();
+            }
+        }
+        return gtNewSimdHWIntrinsicNode(type, op1, cvtIntrinsic, simdSourceBaseJitType, simdSize);
+    }
+    else if (compIsEvexOpportunisticallySupported(isV512Supported))
     {
         /*Generate the control table for VFIXUPIMMSD/SS
         - For conversion to unsigned
@@ -30509,6 +30538,30 @@ void ReturnTypeDesc::InitializeReturnType(Compiler*                comp,
 
         INDEBUG(m_inited = true);
     }
+}
+
+//-------------------------------------------------------------------
+// GetReturnFieldOffset:
+//   For the N'th returned register, identified by "index", returns the
+//   starting offset in the struct return type of the data being returned.
+//
+// Arguments:
+//     index - The register whose offset to get
+//
+// Return Value:
+//     Starting offset of data returned in that register.
+//
+unsigned ReturnTypeDesc::GetReturnFieldOffset(unsigned index) const
+{
+    assert(m_regType[index] != TYP_UNKNOWN);
+#if defined(TARGET_RISCV64) || defined(TARGET_LOONGARCH64)
+    return m_fieldOffset[index];
+#else
+    unsigned offset = 0;
+    for (unsigned i = 0; i < index; i++)
+        offset += genTypeSize(m_regType[i]);
+    return offset;
+#endif
 }
 
 //-------------------------------------------------------------------
