@@ -305,8 +305,9 @@ GenTree* Compiler::fgMorphExpandCast(GenTreeCast* tree)
             //       dstType = int for SSE41
             // For pre-SSE41, the all src is converted to TYP_DOUBLE
             // and goes through helpers.
-            && (tree->gtOverflow() || (dstType == TYP_LONG) ||
-                !(canUseEvexEncoding() || (dstType == TYP_INT && compOpportunisticallyDependsOn(InstructionSet_SSE41))))
+            &&
+            (tree->gtOverflow() || (dstType == TYP_LONG && !compOpportunisticallyDependsOn(InstructionSet_AVX10v2)) ||
+             !(canUseEvexEncoding() || (dstType == TYP_INT && compOpportunisticallyDependsOn(InstructionSet_SSE41))))
 #elif defined(TARGET_ARM)
             // Arm: src = float, dst = int64/uint64 or overflow conversion.
             && (tree->gtOverflow() || varTypeIsLong(dstType))
@@ -340,6 +341,8 @@ GenTree* Compiler::fgMorphExpandCast(GenTreeCast* tree)
 #else
 #if defined(TARGET_AMD64)
                 // Following nodes are handled when lowering the nodes
+                //     float  -> ulong/uint/int/long for AVX10.2
+                //     double -> ulong/uint/int/long for AVX10.2
                 //     float  -> ulong/uint/int for AVX512F
                 //     double -> ulong/uint/long/int for AVX512F
                 //     float  -> int for SSE41
@@ -2545,20 +2548,6 @@ bool Compiler::fgTryMorphStructArg(CallArg* arg)
                         fieldsMatch = false;
                         break;
                     }
-
-                    var_types fieldType = lvaGetDesc(fieldLclNum)->TypeGet();
-                    var_types regType   = genActualType(seg.GetRegisterType());
-
-                    if (!varTypeUsesSameRegType(fieldType, regType))
-                    {
-                        // TODO-CQ: We should be able to tolerate mismatches by inserting GT_BITCAST in lowering.
-                        //
-                        JITDUMP("Struct V%02u will be passed using GT_LCL_FLD because of type mismatch: "
-                                "register type is %s, field local V%02u's type is %s\n",
-                                lclNum, varTypeName(regType), fieldLclNum, varTypeName(fieldType));
-                        fieldsMatch = false;
-                        break;
-                    }
                 }
                 else
                 {
@@ -2708,8 +2697,7 @@ bool Compiler::fgTryMorphStructArg(CallArg* arg)
                 // We sometimes end up with struct reinterpretations where the
                 // retyping into a primitive allows us to replace by a scalar
                 // local here, so make sure we do that if possible.
-                if ((lclVar->GetLclOffs() == 0) && (offset == 0) && (genTypeSize(type) == genTypeSize(dsc)) &&
-                    varTypeUsesSameRegType(type, dsc))
+                if ((lclVar->GetLclOffs() == 0) && (offset == 0) && (genTypeSize(type) == genTypeSize(dsc)))
                 {
                     result = gtNewLclVarNode(lclVar->GetLclNum());
                 }
@@ -7674,7 +7662,10 @@ GenTree* Compiler::fgMorphSmpOp(GenTree* tree, MorphAddrContext* mac, bool* optA
         {
             GenTree* retVal = tree->AsOp()->GetReturnValue();
 
-            if (!tree->TypeIs(TYP_VOID))
+            // Apply some optimizations that change the type of the return.
+            // These are not applicable when this is a merged return that will
+            // be changed into a store and jump to the return BB.
+            if (!tree->TypeIs(TYP_VOID) && ((genReturnBB == nullptr) || (compCurBB == genReturnBB)))
             {
                 if (retVal->OperIs(GT_LCL_FLD))
                 {
@@ -8573,9 +8564,10 @@ DONE_MORPHING_CHILDREN:
         {
             // Retry updating return operand to a field -- assertion
             // prop done when morphing this operand changed the local.
-            //
+            // Skip this for merged returns that will be changed to a store and
+            // jump to the return BB.
             GenTree* const retVal = tree->AsOp()->GetReturnValue();
-            if (retVal != nullptr)
+            if ((retVal != nullptr) && ((genReturnBB == nullptr) || (compCurBB == genReturnBB)))
             {
                 fgTryReplaceStructLocalWithField(retVal);
             }
@@ -8642,28 +8634,22 @@ void Compiler::fgTryReplaceStructLocalWithField(GenTree* tree)
         return;
     }
 
-    // With a `genReturnBB` this `RETURN(src)` tree will be replaced by a `STORE_LCL_VAR<genReturnLocal>(src)`
-    // and `STORE_LCL_VAR` will be transformed into field by field copy without parent local referencing if
-    // possible.
-    GenTreeLclVar* lclVar = tree->AsLclVar();
-    unsigned       lclNum = lclVar->GetLclNum();
-    if ((genReturnLocal == BAD_VAR_NUM) || (genReturnLocal == lclNum))
+    GenTreeLclVar*   lclVar = tree->AsLclVar();
+    unsigned         lclNum = lclVar->GetLclNum();
+    LclVarDsc* const varDsc = lvaGetDesc(lclVar);
+    if (varDsc->CanBeReplacedWithItsField(this))
     {
-        LclVarDsc* const varDsc = lvaGetDesc(lclVar);
-        if (varDsc->CanBeReplacedWithItsField(this))
-        {
-            // We can replace the struct with its only field and allow copy propagation to replace
-            // return value that was written as a field.
-            unsigned const   fieldLclNum = varDsc->lvFieldLclStart;
-            LclVarDsc* const fieldDsc    = lvaGetDesc(fieldLclNum);
+        // We can replace the struct with its only field and allow copy propagation to replace
+        // return value that was written as a field.
+        unsigned const   fieldLclNum = varDsc->lvFieldLclStart;
+        LclVarDsc* const fieldDsc    = lvaGetDesc(fieldLclNum);
 
-            JITDUMP("Replacing an independently promoted local var V%02u with its only field  "
-                    "V%02u for "
-                    "the return [%06u]\n",
-                    lclVar->GetLclNum(), fieldLclNum, dspTreeID(tree));
-            lclVar->SetLclNum(fieldLclNum);
-            lclVar->ChangeType(fieldDsc->lvType);
-        }
+        JITDUMP("Replacing an independently promoted local var V%02u with its only field  "
+                "V%02u for "
+                "the return [%06u]\n",
+                lclVar->GetLclNum(), fieldLclNum, dspTreeID(tree));
+        lclVar->SetLclNum(fieldLclNum);
+        lclVar->ChangeType(fieldDsc->lvType);
     }
 }
 
@@ -10690,9 +10676,7 @@ GenTree* Compiler::fgMorphRetInd(GenTreeOp* ret)
         bool canFold = (indSize == lclVarSize) && (lclVarSize <= REGSIZE_BYTES);
 #endif
 
-        // If we have a shared return temp we cannot represent the store properly with these retyped values,
-        // so skip the optimization in that case.
-        if (canFold && (genReturnBB == nullptr))
+        if (canFold)
         {
             // Fold even if types do not match, lowering will handle it. This allows the local
             // to remain DNER-free and be enregistered.
