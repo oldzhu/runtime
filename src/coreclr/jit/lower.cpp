@@ -651,12 +651,14 @@ GenTree* Lowering::LowerNode(GenTree* node)
 
 #if defined(TARGET_ARM64) || defined(TARGET_LOONGARCH64) || defined(TARGET_RISCV64)
         case GT_CMPXCHG:
+            RISCV64_ONLY(CheckImmedAndMakeContained(node, node->AsCmpXchg()->Data()));
             CheckImmedAndMakeContained(node, node->AsCmpXchg()->Comparand());
             break;
 
         case GT_XORR:
         case GT_XAND:
         case GT_XADD:
+        case GT_XCHG:
             CheckImmedAndMakeContained(node, node->AsOp()->gtOp2);
             break;
 #elif defined(TARGET_XARCH)
@@ -8416,7 +8418,7 @@ void Lowering::CheckNode(Compiler* compiler, GenTree* node)
 #endif // FEATURE_SIMD && TARGET_64BIT
             if (varDsc->lvPromoted)
             {
-                assert(varDsc->lvDoNotEnregister || varDsc->lvIsMultiRegRet);
+                assert(varDsc->lvDoNotEnregister || (node->OperIs(GT_STORE_LCL_VAR) && varDsc->lvIsMultiRegDest));
             }
         }
         break;
