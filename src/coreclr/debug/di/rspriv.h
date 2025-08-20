@@ -6377,7 +6377,7 @@ private:
     // Lazily initialized.
     EXCEPTION_RECORD *  m_pExceptionRecord;
 
-    static const CorDebugUserState kInvalidUserState = CorDebugUserState(-1);
+    static constexpr CorDebugUserState kInvalidUserState = CorDebugUserState(-1);
     CorDebugUserState     m_userState;  // This is the current state of the
                                         // thread, at the time that the
                                         // left side synchronized
