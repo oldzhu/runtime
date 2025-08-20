@@ -49,8 +49,8 @@ namespace asm_sigcontext
 {
 #include <asm/sigcontext.h>
 };
-using asm_sigcontext::_fpx_sw_bytes;
-using asm_sigcontext::_xstate;
+//using asm_sigcontext::_fpx_sw_bytes;
+//using asm_sigcontext::_xstate;
 #endif // XSTATE_SUPPORTED && HOST_AMD64 && !HAVE_PUBLIC_XSTATE_STRUCT
 
 #else // !HAVE_MACH_EXCEPTIONS
@@ -494,7 +494,7 @@ struct sve_context {
 // offset and size of each XFEATURE_MASK_* via CPUID. The extended region always starts at offset
 // 576 which is the same as the address of ymmh
 
-#define FPREG_Xstate_ExtendedStateArea_Offset offsetof(_xstate, ymmh)
+#define FPREG_Xstate_ExtendedStateArea_Offset offsetof(asm_sigcontext::_xstate, ymmh)
 #define FPREG_Xstate_ExtendedStateArea(uc) (reinterpret_cast<uint8_t *>(FPREG_Fpstate(uc)) + \
                                             FPREG_Xstate_ExtendedStateArea_Offset)
 
@@ -508,7 +508,7 @@ struct Xstate_ExtendedFeature
 #define Xstate_ExtendedFeatures_Count (XSTATE_APX + 1)
 extern Xstate_ExtendedFeature Xstate_ExtendedFeatures[Xstate_ExtendedFeatures_Count];
 
-inline _fpx_sw_bytes *FPREG_FpxSwBytes(const ucontext_t *uc)
+inline asm_sigcontext::_fpx_sw_bytes *FPREG_FpxSwBytes(const ucontext_t *uc)
 {
     // Bytes 464..511 in the FXSAVE format are available for software to use for any purpose. In this case, they are used to
     // indicate information about extended state.
@@ -516,7 +516,7 @@ inline _fpx_sw_bytes *FPREG_FpxSwBytes(const ucontext_t *uc)
 
     _ASSERTE(FPREG_Fpstate(uc) != nullptr);
 
-    return reinterpret_cast<_fpx_sw_bytes *>(&FPREG_Fpstate(uc)->FPSTATE_RESERVED[12]);
+    return reinterpret_cast<asm_sigcontext::_fpx_sw_bytes *>(&FPREG_Fpstate(uc)->FPSTATE_RESERVED[12]);
 }
 
 inline UINT32 FPREG_ExtendedSize(const ucontext_t *uc)
@@ -536,7 +536,7 @@ inline bool FPREG_HasExtendedState(const ucontext_t *uc)
     }
 
     UINT32 extendedSize = FPREG_ExtendedSize(uc);
-    if (extendedSize < sizeof(_xstate))
+    if (extendedSize < sizeof(asm_sigcontext::_xstate))
     {
         return false;
     }
