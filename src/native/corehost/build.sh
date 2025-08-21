@@ -76,5 +76,13 @@ setup_dirs
 # Check prereqs.
 check_prereqs
 
+# ============== New environment variable check logic ==============
+if [[ "$__CMakeArgs" != *"-DCLR_CROSS_COMPONENTS_BUILD=1"* ]]; then
+    if [ -n "${MY_CPLUS_INCLUDE_PATH}" ]; then
+        export CPLUS_INCLUDE_PATH="${MY_CPLUS_INCLUDE_PATH}"
+        echo "Set CPLUS_INCLUDE_PATH to ${MY_CPLUS_INCLUDE_PATH}"
+    else                                                                                                                        echo "MY_CPLUS_INCLUDE_PATH environment variable not found"
+    fi                                                                                                                  fi                                                                                                                      # ================================================================
+
 # Build the installer native components.
 build_native "$__TargetOS" "$__TargetArch" "$__scriptpath" "$__IntermediatesDir" "install" "$__CMakeArgs" "installer component"
