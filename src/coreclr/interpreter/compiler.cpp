@@ -623,6 +623,19 @@ void InterpCompiler::CheckStackHelper(int n)
     }
 }
 
+void InterpCompiler::CheckStackExact(int n)
+{
+    int32_t currentSize = (int32_t)(m_pStackPointer - m_pStackBase);
+    if (currentSize < n)
+    {
+        BADCODE("Stack underflow");
+    }
+    else if (currentSize > n)
+    {
+        BADCODE("Stack contains extra data");
+    }
+}
+
 void InterpCompiler::PushTypeExplicit(StackType stackType, CORINFO_CLASS_HANDLE clsHnd, int size)
 {
     EnsureStack(1);
@@ -1098,6 +1111,9 @@ void InterpCompiler::BuildGCInfo(InterpMethod *pInterpMethod)
                     continue;
             }
 
+            if (pVar->pinned)
+                flags = (GcSlotFlags)(flags | GC_SLOT_PINNED);
+
             if (pass == 0)
                 slotAllocator.AllocateOrReuseGcSlot(pVar->offset, flags);
             else
@@ -1241,7 +1257,7 @@ InterpMethod* InterpCompiler::CreateInterpMethod()
 
     bool unmanagedCallersOnly = corJitFlags.IsSet(CORJIT_FLAGS::CORJIT_FLAG_REVERSE_PINVOKE);
 
-    InterpMethod *pMethod = new InterpMethod(m_methodHnd, m_totalVarsStackSize, pDataItems, initLocals, unmanagedCallersOnly);
+    InterpMethod *pMethod = new InterpMethod(m_methodHnd, m_ILLocalsOffset, m_totalVarsStackSize, pDataItems, initLocals, unmanagedCallersOnly);
 
     return pMethod;
 }
@@ -1507,9 +1523,11 @@ void InterpCompiler::CreateILVars()
 
     for (int i = 0; i < numILLocals; i++) {
         CORINFO_CLASS_HANDLE argClass;
-        CorInfoType argCorType = strip(m_compHnd->getArgType(&m_methodInfo->locals, sigArg, &argClass));
+        CorInfoTypeWithMod argCorTypeWithFlags = m_compHnd->getArgType(&m_methodInfo->locals, sigArg, &argClass);
+        CorInfoType argCorType = strip(argCorTypeWithFlags);
+        bool pinned = (argCorTypeWithFlags & CORINFO_TYPE_MOD_PINNED) == CORINFO_TYPE_MOD_PINNED;
         InterpType interpType = GetInterpType(argCorType);
-        CreateNextLocalVar(index, argClass, interpType, &offset);
+        CreateNextLocalVar(index, argClass, interpType, &offset, pinned);
         sigArg = m_compHnd->getArgNext(sigArg);
         index++;
     }
@@ -1537,7 +1555,7 @@ void InterpCompiler::CreateILVars()
     m_totalVarsStackSize = offset;
 }
 
-void InterpCompiler::CreateNextLocalVar(int iArgToSet, CORINFO_CLASS_HANDLE argClass, InterpType interpType, int32_t *pOffset)
+void InterpCompiler::CreateNextLocalVar(int iArgToSet, CORINFO_CLASS_HANDLE argClass, InterpType interpType, int32_t *pOffset, bool pinned)
 {
     int32_t align;
     int32_t size = GetInterpTypeStackSize(argClass, interpType, &align);
@@ -1549,6 +1567,7 @@ void InterpCompiler::CreateNextLocalVar(int iArgToSet, CORINFO_CLASS_HANDLE argC
     m_pVars[iArgToSet].size = size;
     *pOffset = ALIGN_UP_TO(*pOffset, align);
     m_pVars[iArgToSet].offset = *pOffset;
+    m_pVars[iArgToSet].pinned = pinned;
     INTERP_DUMP("alloc arg var %d to offset %d\n", iArgToSet, *pOffset);
     *pOffset += size;
 }
@@ -2835,6 +2854,11 @@ void InterpCompiler::EmitCall(CORINFO_RESOLVED_TOKEN* pConstrainedToken, bool re
                 m_pLastNewIns->SetDVar(pThisStackInfo->var);
             }
         }
+
+#if DEBUG
+        if (InterpConfig.InterpHaltOnCall().contains(m_compHnd, resolvedCallToken.hMethod, resolvedCallToken.hClass, nullptr))
+            assert(!"HaltOnCall");
+#endif
     }
 
     if (newObj && (callInfo.classFlags & CORINFO_FLG_VAROBJSIZE))
@@ -3082,7 +3106,7 @@ void InterpCompiler::EmitCall(CORINFO_RESOLVED_TOKEN* pConstrainedToken, bool re
             }
             else if (isCalli)
             {
-                AddIns(INTOP_CALLI);
+                AddIns(tailcall ? INTOP_CALLI_TAIL : INTOP_CALLI);
                 m_pLastNewIns->data[0] = GetDataItemIndex(calliCookie);
                 m_pLastNewIns->SetSVars2(CALL_ARGS_SVAR, callIFunctionPointerVar);
             }
@@ -3099,6 +3123,11 @@ void InterpCompiler::EmitCall(CORINFO_RESOLVED_TOKEN* pConstrainedToken, bool re
                 {
                     assert(!isPInvoke && !isMarshaledPInvoke);
                     AddIns(INTOP_CALLDELEGATE);
+                }
+                else if (tailcall)
+                {
+                    assert(!isPInvoke && !isMarshaledPInvoke);
+                    AddIns(INTOP_CALL_TAIL);
                 }
                 else
                 {
@@ -3136,14 +3165,14 @@ void InterpCompiler::EmitCall(CORINFO_RESOLVED_TOKEN* pConstrainedToken, bool re
 
             calliCookie = m_compHnd->GetCookieForInterpreterCalliSig(&callInfo.sig);
 
-            AddIns(INTOP_CALLI);
+            AddIns(tailcall ? INTOP_CALLI_TAIL : INTOP_CALLI);
             m_pLastNewIns->data[0] = GetDataItemIndex(calliCookie);
             m_pLastNewIns->SetSVars2(CALL_ARGS_SVAR, codePointerLookupResult);
             break;
         }
         case CORINFO_VIRTUALCALL_VTABLE:
             // Traditional virtual call. In theory we could optimize this to using the vtable
-            AddIns(INTOP_CALLVIRT);
+            AddIns(tailcall ? INTOP_CALLVIRT_TAIL : INTOP_CALLVIRT);
             m_pLastNewIns->data[0] = GetDataItemIndex(callInfo.hMethod);
             break;
 
@@ -3171,13 +3200,13 @@ void InterpCompiler::EmitCall(CORINFO_RESOLVED_TOKEN* pConstrainedToken, bool re
 
                 calliCookie = m_compHnd->GetCookieForInterpreterCalliSig(&callInfo.sig);
 
-                AddIns(INTOP_CALLI);
+                AddIns(tailcall ? INTOP_CALLI_TAIL : INTOP_CALLI);
                 m_pLastNewIns->data[0] = GetDataItemIndex(calliCookie);
                 m_pLastNewIns->SetSVars2(CALL_ARGS_SVAR, synthesizedLdvirtftnPtrVar);
             }
             else
             {
-                AddIns(INTOP_CALLVIRT);
+                AddIns(tailcall ? INTOP_CALLVIRT_TAIL : INTOP_CALLVIRT);
                 m_pLastNewIns->data[0] = GetDataItemIndex(callInfo.hMethod);
             }
             break;
@@ -3916,11 +3945,12 @@ retry_emit:
 
                 if (retType == InterpTypeVoid)
                 {
+                    CheckStackExact(0);
                     AddIns(INTOP_RET_VOID);
                 }
                 else if (retType == InterpTypeVT)
                 {
-                    CHECK_STACK(1);
+                    CheckStackExact(1);
                     AddIns(INTOP_RET_VT);
                     m_pStackPointer--;
                     int32_t retVar = m_pStackPointer[0].var;
@@ -3929,7 +3959,7 @@ retry_emit:
                 }
                 else
                 {
-                    CHECK_STACK(1);
+                    CheckStackExact(1);
                     AddIns(INTOP_RET);
                     m_pStackPointer--;
                     m_pLastNewIns->SetSVar(m_pStackPointer[0].var);
@@ -5296,7 +5326,7 @@ retry_emit:
                 int byrefOfTypedRefVar = m_pStackPointer[-1].var;
                 m_pLastNewIns->SetDVar(byrefOfTypedRefVar);
                 m_pStackPointer--;
-                
+
                 AddIns(GetStindForType(InterpTypeByRef));
                 m_pLastNewIns->data[0] = OFFSETOF__CORINFO_TypedReference__dataPtr;
                 m_pLastNewIns->SetSVars2(byrefOfTypedRefVar, addressVar);
@@ -5361,7 +5391,7 @@ retry_emit:
                         m_pLastNewIns->data[2] = 0;
                         m_pLastNewIns->SetSVar(typedByRefVar);
                         m_pLastNewIns->SetDVar(classHandleVar);
-                        
+
                         AddIns(INTOP_CALL_HELPER_P_S);
                         m_pLastNewIns->data[0] = GetDataForHelperFtn(CORINFO_HELP_TYPEHANDLE_TO_RUNTIMETYPEHANDLE_MAYBENULL);
                         m_pLastNewIns->SetSVar(classHandleVar);
