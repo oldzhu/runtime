@@ -19777,7 +19777,7 @@ size_t emitter::emitOutputInstr(insGroup* ig, instrDesc* id, BYTE** dp)
         {
             assert((ins == INS_vextractf32x4) || (ins == INS_vextractf32x8) || (ins == INS_vextractf64x2) ||
                    (ins == INS_vextractf64x4) || (ins == INS_vextracti32x4) || (ins == INS_vextracti32x8) ||
-                   (ins == INS_vextracti64x2) || (ins == INS_vextracti64x4));
+                   (ins == INS_vextracti64x2) || (ins == INS_vextracti64x4) || (ins == INS_vcvtps2ph));
             assert(UseSimdEncoding());
             emitGetInsDcmCns(id, &cnsVal);
             // we do not need VEX.vvvv to encode the register operand
@@ -21351,6 +21351,8 @@ emitter::insExecutionCharacteristics emitter::getInsExecutionCharacteristics(ins
         case INS_cvtpd2ps:
         case INS_cvttpd2dq:
         case INS_vcvtpd2udq:
+        case INS_vcvtph2ps:
+        case INS_vcvtps2ph:
         case INS_vcvtps2qq:
         case INS_vcvtps2uqq:
         case INS_vcvtqq2ps:
