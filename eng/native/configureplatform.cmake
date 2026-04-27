@@ -526,7 +526,7 @@ else()
         if(CLR_CMAKE_TARGET_BROWSER)
             add_link_options(-fwasm-exceptions)
             add_link_options(-Wno-unused-command-line-argument)
-            add_link_options(-Wl,-error-limit=0)
+            add_link_options(-Wl,--error-limit=0)
 
             add_link_options(-nostdlib)
             add_link_options(-lbulkmemory)
