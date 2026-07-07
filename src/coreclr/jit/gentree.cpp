@@ -1171,11 +1171,11 @@ bool CallArg::IsArgAddedLate() const
     // static_cast to "enum class" for old gcc support
     switch (static_cast<WellKnownArg>(m_wellKnownArg))
     {
-        case WellKnownArg::VirtualStubCell:
-        case WellKnownArg::PInvokeCookie:
-        case WellKnownArg::PInvokeTarget:
-        case WellKnownArg::R2RIndirectionCell:
-            return true;
+#define WELL_KNOWN_ARG(name, shortName, isILArg, addedByMorph)                                                         \
+    case WellKnownArg::name:                                                                                           \
+        return addedByMorph;
+#include "wellknownargs.h"
+
         default:
             return false;
     }
@@ -1185,18 +1185,18 @@ bool CallArg::IsArgAddedLate() const
 // IsUserArg: Check if this is an argument that can be treated as
 //   user-defined (in IL).
 //
-// Remarks:
-//   "this" and ShiftLow/ShiftHigh are recognized as user-defined
-//
 bool CallArg::IsUserArg() const
 {
     switch (static_cast<WellKnownArg>(m_wellKnownArg))
     {
         case WellKnownArg::None:
-        case WellKnownArg::ShiftLow:
-        case WellKnownArg::ShiftHigh:
-        case WellKnownArg::ThisPointer:
             return true;
+
+#define WELL_KNOWN_ARG(name, shortName, isILArg, addedByMorph)                                                         \
+    case WellKnownArg::name:                                                                                           \
+        return isILArg;
+#include "wellknownargs.h"
+
         default:
             return false;
     }
@@ -9473,6 +9473,14 @@ GenTree* Compiler::gtNewZeroConNode(var_types type)
     }
 #endif // FEATURE_SIMD
 
+#if defined(FEATURE_MASKED_HW_INTRINSICS)
+    if (varTypeIsMask(type))
+    {
+        // The GenTreeMskCon constructor already zero-initializes the mask value.
+        return gtNewMskConNode(type);
+    }
+#endif // FEATURE_MASKED_HW_INTRINSICS
+
     type = genActualType(type);
     switch (type)
     {
@@ -9914,6 +9922,39 @@ GenTreeCall* Compiler::gtNewCallNode(gtCallTypes           callType,
 #endif // !defined(TARGET_64BIT)
 
     return node;
+}
+
+//------------------------------------------------------------------------
+// gtNewUserCallNode: Create a new user function (CT_USER_FUNC) call node.
+//
+// Arguments:
+//   handle - The method handle of the call.
+//   type   - The return type of the call.
+//   di     - Debug info to associate with the call.
+//
+// Return Value:
+//   The new call node.
+//
+// Remarks:
+//   Unlike gtNewCallNode, this also sets the Ready-to-Run entrypoint on the
+//   call so that it is marked R2R-relative-indirect. This is required for
+//   JIT-synthesized calls that do not otherwise get an entrypoint assigned
+//   through the importer. It is a no-op when not compiling for Ready-to-Run.
+//
+GenTreeCall* Compiler::gtNewUserCallNode(CORINFO_METHOD_HANDLE handle, var_types type, const DebugInfo& di)
+{
+    GenTreeCall* call = gtNewCallNode(CT_USER_FUNC, handle, type, di);
+
+#ifdef FEATURE_READYTORUN
+    if (IsReadyToRun())
+    {
+        CORINFO_CONST_LOOKUP entryPoint;
+        info.compCompHnd->getFunctionEntryPoint(handle, &entryPoint);
+        call->setEntryPoint(entryPoint);
+    }
+#endif
+
+    return call;
 }
 
 GenTreeLclVar* Compiler::gtNewLclvNode(unsigned lnum, var_types type DEBUGARG(IL_OFFSET offs))
@@ -14556,51 +14597,11 @@ const char* Compiler::gtGetWellKnownArgNameForArgMsg(WellKnownArg arg)
 {
     switch (arg)
     {
-        case WellKnownArg::ThisPointer:
-            return "this";
-        case WellKnownArg::VarArgsCookie:
-            return "va cookie";
-        case WellKnownArg::InstParam:
-            return "gctx";
-        case WellKnownArg::AsyncContinuation:
-            return "async";
-        case WellKnownArg::RetBuffer:
-            return "retbuf";
-        case WellKnownArg::PInvokeFrame:
-            return "pinv frame";
-        case WellKnownArg::ShiftLow:
-            return "shift low";
-        case WellKnownArg::ShiftHigh:
-            return "shift high";
-        case WellKnownArg::VirtualStubCell:
-            return "vsd cell";
-        case WellKnownArg::PInvokeCookie:
-            return "pinv cookie";
-        case WellKnownArg::PInvokeTarget:
-            return "pinv tgt";
-        case WellKnownArg::R2RIndirectionCell:
-            return "r2r cell";
-        case WellKnownArg::ValidateIndirectCallTarget:
-        case WellKnownArg::DispatchIndirectCallTarget:
-            return "cfg tgt";
-        case WellKnownArg::SwiftError:
-            return "swift error";
-        case WellKnownArg::SwiftSelf:
-            return "swift self";
-        case WellKnownArg::X86TailCallSpecialArg:
-            return "tail call";
-        case WellKnownArg::StackArrayLocal:
-            return "&lcl arr";
-        case WellKnownArg::RuntimeMethodHandle:
-            return "meth hnd";
-        case WellKnownArg::AsyncExecutionContext:
-            return "exec ctx";
-        case WellKnownArg::AsyncSynchronizationContext:
-            return "sync ctx";
-        case WellKnownArg::WasmShadowStackPointer:
-            return "wasm sp";
-        case WellKnownArg::WasmPortableEntryPoint:
-            return "wasm pep";
+#define WELL_KNOWN_ARG(name, shortName, isILArg, addedByMorph)                                                         \
+    case WellKnownArg::name:                                                                                           \
+        return shortName;
+#include "wellknownargs.h"
+
         default:
             return nullptr;
     }
@@ -35773,16 +35774,61 @@ GenTree* Compiler::gtFoldExprHWIntrinsic(GenTreeHWIntrinsic* tree)
                 {
                     case FloatComparisonMode::OrderedFalseNonSignaling:
                     case FloatComparisonMode::OrderedFalseSignaling:
-                    {
-                        resultNode = gtNewZeroConNode(retType);
-                        resultNode = gtWrapWithSideEffects(resultNode, tree, GTF_ALL_EFFECT);
-                        break;
-                    }
-
                     case FloatComparisonMode::UnorderedTrueNonSignaling:
                     case FloatComparisonMode::UnorderedTrueSignaling:
                     {
-                        resultNode = gtNewAllBitsSetConNode(retType);
+                        bool isFalse = (mode == FloatComparisonMode::OrderedFalseNonSignaling) ||
+                                       (mode == FloatComparisonMode::OrderedFalseSignaling);
+
+                        if (ni == NI_AVX_CompareScalar)
+                        {
+                            // CompareScalar only updates the lowest element and copies the remaining
+                            // (upper) elements from op1 unchanged. We can therefore only constant fold
+                            // this when op1 is itself a constant so that those upper elements are known.
+
+                            if (!op1->IsCnsVec())
+                            {
+                                break;
+                            }
+
+                            GenTreeVecCon* vecCon = op1->AsVecCon();
+
+                            // Set the lowest element to the comparison result (all zeros for a false
+                            // mode, all ones for a true mode) while leaving the upper elements intact.
+
+                            if (simdBaseType == TYP_FLOAT)
+                            {
+                                vecCon->gtSimdVal.u32[0] = isFalse ? 0 : 0xFFFFFFFF;
+                            }
+                            else
+                            {
+                                assert(simdBaseType == TYP_DOUBLE);
+                                vecCon->gtSimdVal.u64[0] = isFalse ? 0 : 0xFFFFFFFFFFFFFFFF;
+                            }
+
+                            fgUpdateConstTreeValueNumber(vecCon);
+                            resultNode = vecCon;
+                        }
+                        else if (isFalse)
+                        {
+                            resultNode = gtNewZeroConNode(retType);
+                        }
+#if defined(FEATURE_MASKED_HW_INTRINSICS)
+                        else if (varTypeIsMask(retType))
+                        {
+                            // A true comparison produces an all-true mask for the given element count.
+
+                            GenTreeMskCon* mskCon = gtNewMskConNode(retType);
+                            mskCon->gtSimdMaskVal =
+                                simdmask_t::AllBitsSet(GenTreeVecCon::ElementCount(simdSize, simdBaseType));
+                            resultNode = mskCon;
+                        }
+#endif // FEATURE_MASKED_HW_INTRINSICS
+                        else
+                        {
+                            resultNode = gtNewAllBitsSetConNode(retType);
+                        }
+
                         resultNode = gtWrapWithSideEffects(resultNode, tree, GTF_ALL_EFFECT);
                         break;
                     }
