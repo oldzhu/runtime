@@ -1872,8 +1872,12 @@ void CodeGen::genCodeForConstant(GenTree* treeNode)
     if ((type == TYP_INT) || (type == TYP_LONG))
     {
         icon = treeNode->AsIntConCommon();
-        if (icon->ImmedValNeedsReloc(m_compiler))
+        if (icon->IsIconHandle())
         {
+            // Wasm has no absolute-address literals; every handle is materialized as a module-base-
+            // relative constant and relocated. compReloc is always on for a real AOT compile, so a
+            // handle only reaches here without needing a reloc under a cross-VM SuperPMI replay.
+            assert(icon->ImmedValNeedsReloc(m_compiler) || m_compiler->RunningSuperPmiReplay());
             GetEmitter()->emitAddressConstant((void*)icon->IntegralValue());
             WasmProduceReg(treeNode);
             return;
@@ -1891,7 +1895,11 @@ void CodeGen::genCodeForConstant(GenTree* treeNode)
             case TYP_INT:
             {
                 ins = INS_i32_const;
-                assert(FitsIn<INT32>(bits));
+                // Wasm integers are sign-agnostic: any 32-bit pattern is a valid i32.const,
+                // reduced to its signed value for a canonical SLEB128 encoding. Truncating
+                // through uint32_t keeps the low-32-bit reduction well-defined.
+                assert(FitsIn<INT32>(bits) || FitsIn<UINT32>(bits));
+                bits = static_cast<int32_t>(static_cast<uint32_t>(bits));
                 break;
             }
             case TYP_LONG:
@@ -2906,6 +2914,20 @@ void CodeGen::genCallInstruction(GenTreeCall* call)
 
     params.wasmSignature = m_compiler->info.compCompHnd->getWasmTypeSymbol(typeStack.Data(), typeStack.Height());
 
+    // R2R keeps its shadow SP in a local and leaves the __stack_pointer global stale; the PInvoke
+    // prolog (JIT_PInvokeBegin) normally publishes the current SP to __stack_pointer before native
+    // code runs, but that prolog/epilog is skipped for SuppressGCTransition calls (see Lowering).
+    // Without a publish, the native SuppressGCTransition callee allocates its shadow frame from the
+    // stale global (our caller's SP, above our frame) and overlaps/clobbers our address-taken locals.
+    // Publish our shadow SP here so the callee allocates below our frame. This is a net-zero operation
+    // on the Wasm operand stack, so it is safe to emit with the call arguments already pushed.
+    if (call->IsUnmanaged() && call->IsSuppressGCTransition())
+    {
+        GetEmitter()->emitIns_I(INS_local_get, EA_PTRSIZE, GetStackPointerRegIndex());
+        GetEmitter()->emitIns_I(INS_global_set, EA_HANDLE_CNS_RELOC,
+                                (cnsval_ssize_t)(size_t)m_compiler->eeGetWasmWellKnownGlobals()->stackPointer);
+    }
+
     // A non-null target expression always indicates an indirect call on Wasm,
     // as currently the only possible result of the target expression would be a
     // table index which must be used via call_indirect
@@ -3748,7 +3770,9 @@ void CodeGen::genEmitGSCookieCheck(bool tailCall)
 #ifdef PROFILING_SUPPORTED
 void CodeGen::genProfilingLeaveCallback(unsigned helper)
 {
-    NYI_WASM("genProfilingLeaveCallback");
+    // Profiler ELT hooks are not yet implemented on WASM. The matching enter callback in
+    // genFnProlog is already skipped (#if !TARGET_WASM), so emit nothing here rather than
+    // asserting; this keeps WASM consistently free of ELT hooks. See #130953.
 }
 #endif
 
