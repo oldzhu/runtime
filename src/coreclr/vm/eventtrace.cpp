@@ -788,12 +788,9 @@ HRESULT ETW::TypeSystemLog::PreRegistrationInit()
 {
     LIMITED_METHOD_CONTRACT;
 
-    if (!AllLoggedTypes::s_cs.InitNoThrow(
+    AllLoggedTypes::s_cs.Init(
         CrstEtwTypeLogHash,
-        CRST_UNSAFE_ANYMODE))       // This lock is taken during a GC while walking the heap
-    {
-        return E_FAIL;
-    }
+        CRST_UNSAFE_ANYMODE);
 
     return S_OK;
 }
@@ -4536,6 +4533,11 @@ VOID ETW::MethodLog::SendMethodEvent(MethodDesc *pMethodDesc, DWORD dwEventOptio
     // EECodeInfo is technically initialized by a "PCODE", but it can also be initialized
     // by a TADDR (i.e., w/out thumb bit set on ARM)
     EECodeInfo codeInfo(start);
+    if (!codeInfo.IsValid())
+    {
+        // The address doesn't map to a registered JIT manager, so there is no region info to report.
+        return;
+    }
 
     // MethodToken ==> MethodRegionInfo
     IJitManager::MethodRegionInfo methodRegionInfo;
@@ -4760,6 +4762,11 @@ VOID ETW::MethodLog::SendMethodILToNativeMapEvent(MethodDesc * pMethodDesc, DWOR
     // EECodeInfo is technically initialized by a "PCODE", but it can also be initialized
     // by a TADDR (i.e., w/out thumb bit set on ARM)
     EECodeInfo codeInfo(start);
+    if (!codeInfo.IsValid())
+    {
+        return;
+    }
+
     TADDR startAddress = codeInfo.GetStartAddress();
     DebugInfoRequest request;
     request.InitFromStartingAddr(codeInfo.GetMethodDesc(), startAddress);
