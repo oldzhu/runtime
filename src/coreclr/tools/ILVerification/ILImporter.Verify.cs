@@ -2860,11 +2860,14 @@ namespace Internal.IL
         void ReportInvalidBranchTarget(int targetOffset)
         {
             VerificationError(VerifierError.BadBranch);
+            // The later passes index the basic block array with the branch target.
+            AbortMethodVerification();
         }
 
         void ReportFallthroughAtEndOfMethod()
         {
             VerificationError(VerifierError.MethodFallthrough);
+            AbortMethodVerification();
         }
 
         void ReportMethodEndInsideInstruction()
